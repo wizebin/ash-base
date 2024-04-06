@@ -32,14 +32,16 @@ impl CoherentQuads {
         let local_vertex_buffer_data: RefCell<Vec<Vertex>> = RefCell::new(Vec::with_capacity(max_quad_quantity as usize * 4));
         let local_index_buffer_data: Vec<u32> = Vec::with_capacity(max_quad_quantity as usize * 6);
 
+        let byte_size_of_single_vertex = mem::size_of::<Vertex>() as u64;
+        let byte_size_of_index_instance = 6 * mem::size_of::<u32>() as u64;
+
         let index_buffer_info = vk::BufferCreateInfo {
-            size: size_of_val(&local_index_buffer_data) as u64,
+            size: byte_size_of_index_instance * (max_quad_quantity as u64),
             usage: vk::BufferUsageFlags::INDEX_BUFFER,
             sharing_mode: vk::SharingMode::EXCLUSIVE,
             ..Default::default()
         };
 
-        let byte_size_of_single_vertex = mem::size_of::<Vertex>() as u64;
 
         let vertex_input_buffer_info = vk::BufferCreateInfo {
             size: byte_size_of_single_vertex * (max_quad_quantity as u64),
@@ -106,6 +108,22 @@ impl CoherentQuads {
             index_buffer_memory,
             vertex_input_buffer_memory,
         }
+    }
+
+    pub fn index_quantity(&self) -> usize {
+        self.local_index_buffer_data.len()
+    }
+
+    pub fn quad_quantity(&self) -> usize {
+        self.local_vertex_buffer_data.borrow().len() / self.vertex_buffer_instance_node_quantity()
+    }
+
+    pub fn index_buffer_instance_node_quantity(&self) -> usize {
+        6
+    }
+
+    pub fn vertex_buffer_instance_node_quantity(&self) -> usize {
+        4
     }
 
     pub fn add_quad(&mut self, vertices: [Vertex; 4]) {

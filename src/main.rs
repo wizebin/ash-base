@@ -34,6 +34,27 @@ use std::os::raw::c_void;
 
 use ash::util::*;
 
+pub fn make_quad_vertices(x: f32, y: f32, width: f32, height: f32) -> [Vertex; 4] {
+    [
+        Vertex {
+            pos: [x, y, 0.0, 1.0],
+            uv: [0.0, 0.0],
+        },
+        Vertex {
+            pos: [x, y + height, 0.0, 1.0],
+            uv: [0.0, 1.0],
+        },
+        Vertex {
+            pos: [x + width, y + height, 0.0, 1.0],
+            uv: [1.0, 1.0],
+        },
+        Vertex {
+            pos: [x + width, y, 0.0, 1.0],
+            uv: [1.0, 0.0],
+        },
+    ]
+}
+
 pub struct ExampleBase {
     pub entry: Entry,
     pub instance: Instance,
@@ -609,27 +630,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             })
             .collect();
 
-        let vertices = [
-            Vertex {
-                pos: [-0.5, -0.5, 0.0, 1.0],
-                uv: [0.0, 0.0],
-            },
-            Vertex {
-                pos: [-0.5, 0.5, 0.0, 1.0],
-                uv: [0.0, 1.0],
-            },
-            Vertex {
-                pos: [0.5, 0.5, 0.0, 1.0],
-                uv: [1.0, 1.0],
-            },
-            Vertex {
-                pos: [0.5, -0.5, 0.0, 1.0],
-                uv: [1.0, 0.0],
-            },
-        ];
+        let vertices = make_quad_vertices(0.0, 0.0, 0.5, 0.5);
 
-        let mut quads = CoherentQuads::new(1, base.shared_device(), base.device_memory_properties);
+        let mut quads = CoherentQuads::new(2, base.shared_device(), base.device_memory_properties);
         quads.add_quad(vertices);
+        quads.add_quad(vertices.clone());
         quads.remap_data();
 
         let uniform_color_buffer_data = Vector3 {
@@ -1104,27 +1109,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             let current_swapchain_image = base.get_next_swapchain_image_index();
             let frame = base.increment_frame();
 
-            let distance_from_zero = (frame as f32 / 100.0).sin() / 2.0 + 0.5;
-            let updated_vertices = [
-                Vertex {
-                    pos: [-1.0 * distance_from_zero, -1.0 * distance_from_zero, 0.75, 1.0],
-                    uv: [0.0, 0.0],
-                },
-                Vertex {
-                    pos: [-1.0 * distance_from_zero, 1.0 * distance_from_zero, 0.75, 1.0],
-                    uv: [0.0, 1.0],
-                },
-                Vertex {
-                    pos: [1.0 * distance_from_zero, 1.0 * distance_from_zero, 0.75, 1.0],
-                    uv: [1.0, 1.0],
-                },
-                Vertex {
-                    pos: [1.0 * distance_from_zero, -1.0 * distance_from_zero, 0.75, 1.0],
-                    uv: [1.0, 0.0],
-                },
-            ];
+            let distance_from_zero = (frame as f32 / 20.0).sin() / 2.0 + 0.5;
 
-            quads.modify_quad(0, updated_vertices);
+            quads.modify_quad(0, make_quad_vertices(-distance_from_zero, -distance_from_zero, distance_from_zero * 2.0, distance_from_zero * 2.0));
+            quads.modify_quad(1, make_quad_vertices(0.0, 0.0, distance_from_zero * 2.0, distance_from_zero * 2.0));
             quads.remap_data();
 
             let (present_index, _) = base
@@ -1199,8 +1187,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     );
                     device.cmd_draw_indexed(
                         draw_command_buffer,
-                        quads.local_index_buffer_data.len() as u32,
-                        1,
+                        quads.index_quantity() as u32,
+                        quads.quad_quantity() as u32,
                         0,
                         0,
                         1,

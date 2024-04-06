@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vulkan_image::VulkanImage, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -25,7 +25,7 @@ use winit::{
     keyboard::{Key, NamedKey},
     platform::run_on_demand::EventLoopExtRunOnDemand,
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
-    window::WindowBuilder,
+    window::{Window, WindowBuilder},
 };
 
 use std::io::Cursor;
@@ -34,27 +34,6 @@ use std::os::raw::c_void;
 
 use ash::util::*;
 
-pub fn make_quad_vertices(x: f32, y: f32, width: f32, height: f32) -> [Vertex; 4] {
-    [
-        Vertex {
-            pos: [x, y, 0.0, 1.0],
-            uv: [0.0, 0.0],
-        },
-        Vertex {
-            pos: [x, y + height, 0.0, 1.0],
-            uv: [0.0, 1.0],
-        },
-        Vertex {
-            pos: [x + width, y + height, 0.0, 1.0],
-            uv: [1.0, 1.0],
-        },
-        Vertex {
-            pos: [x + width, y, 0.0, 1.0],
-            uv: [1.0, 0.0],
-        },
-    ]
-}
-
 pub struct ExampleBase {
     pub entry: Entry,
     pub instance: Instance,
@@ -62,7 +41,7 @@ pub struct ExampleBase {
     pub surface_loader: surface::Instance,
     pub swapchain_loader: swapchain::Device,
     pub debug_utils_loader: debug_utils::Instance,
-    pub window: winit::window::Window,
+    pub window: Arc<Mutex<Window>>,
     pub event_loop: RefCell<EventLoop<()>>,
     pub debug_call_back: vk::DebugUtilsMessengerEXT,
 
@@ -115,7 +94,7 @@ impl ExampleBase {
         frame
     }
 
-    pub fn render_loop<F: Fn()>(&self, f: F) -> Result<(), impl Error> {
+    pub fn render_loop<F: Fn()>(&self, render: F) -> Result<(), impl Error> {
         self.event_loop.borrow_mut().run_on_demand(|event, elwp| {
             elwp.set_control_flow(ControlFlow::Poll);
             match event {
@@ -135,7 +114,7 @@ impl ExampleBase {
                 } => {
                     elwp.exit();
                 }
-                Event::AboutToWait => f(),
+                Event::AboutToWait => render(),
                 _ => (),
             }
         })
@@ -143,61 +122,31 @@ impl ExampleBase {
 
     pub fn new(window_width: u32, window_height: u32) -> Result<Self, Box<dyn Error>> {
         unsafe {
+            let app_name = "Ash Grid";
+
             let event_loop = EventLoop::new()?;
-            let window = WindowBuilder::new()
+            let window = Arc::new(Mutex::new(WindowBuilder::new()
                 .with_title("Ash - Example")
                 .with_inner_size(winit::dpi::LogicalSize::new(
                     f64::from(window_width),
                     f64::from(window_height),
                 ))
                 .build(&event_loop)
-                .unwrap();
+                .unwrap()));
+
             let entry = Entry::linked();
-            let app_name = ffi::CStr::from_bytes_with_nul_unchecked(b"VulkanTriangle\0");
 
-            let layer_names = [ffi::CStr::from_bytes_with_nul_unchecked(
-                b"VK_LAYER_KHRONOS_validation\0",
-            )];
-            let layers_names_raw: Vec<*const c_char> = layer_names
-                .iter()
-                .map(|raw_name| raw_name.as_ptr())
-                .collect();
-
-            let mut extension_names =
-                ash_window::enumerate_required_extensions(window.display_handle()?.as_raw())
-                    .unwrap()
-                    .to_vec();
-            extension_names.push(debug_utils::NAME.as_ptr());
-
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            {
-                extension_names.push(ash::khr::portability_enumeration::NAME.as_ptr());
-                // Enabling this extension is a requirement when using `VK_KHR_portability_subset`
-                extension_names.push(ash::khr::get_physical_device_properties2::NAME.as_ptr());
-            }
-
-            let appinfo = vk::ApplicationInfo::default()
-                .application_name(app_name)
-                .application_version(0)
-                .engine_name(app_name)
-                .engine_version(0)
-                .api_version(vk::make_api_version(0, 1, 0, 0));
-
-            let create_flags = if cfg!(any(target_os = "macos", target_os = "ios")) {
-                vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR
-            } else {
-                vk::InstanceCreateFlags::default()
+            let instance = make_vulkan_instance(app_name, &entry, window.clone());
+            let instance = match instance {
+                Ok(instance) => instance,
+                Err(err) => {
+                    eprintln!("Failed to create instance: {}", err);
+                    return Err(err);
+                }
             };
 
-            let create_info = vk::InstanceCreateInfo::default()
-                .application_info(&appinfo)
-                .enabled_layer_names(&layers_names_raw)
-                .enabled_extension_names(&extension_names)
-                .flags(create_flags);
-
-            let instance: Instance = entry
-                .create_instance(&create_info, None)
-                .expect("Instance creation error");
+            let locked_window = window.clone();
+            let locked_window = locked_window.lock().unwrap();
 
             let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
                 .message_severity(
@@ -219,8 +168,8 @@ impl ExampleBase {
             let surface = ash_window::create_surface(
                 &entry,
                 &instance,
-                window.display_handle()?.as_raw(),
-                window.window_handle()?.as_raw(),
+                locked_window.display_handle()?.as_raw(),
+                locked_window.window_handle()?.as_raw(),
                 None,
             )
             .unwrap();

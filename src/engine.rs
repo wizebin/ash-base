@@ -8,3 +8,5 @@ pub mod vulkan_image;
 pub mod dimensions;
 pub mod vulkan_texture;
 pub mod vulkan_ubo;
+pub mod vertex_generation;
+pub mod vulkan_instance;

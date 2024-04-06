@@ -42,7 +42,6 @@ impl CoherentQuads {
             ..Default::default()
         };
 
-
         let vertex_input_buffer_info = vk::BufferCreateInfo {
             size: byte_size_of_single_vertex * (max_quad_quantity as u64),
             usage: vk::BufferUsageFlags::VERTEX_BUFFER,

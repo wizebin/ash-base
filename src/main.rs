@@ -1068,12 +1068,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
 
         let color_blend_attachment_states = [vk::PipelineColorBlendAttachmentState {
-            blend_enable: 0,
-            src_color_blend_factor: vk::BlendFactor::SRC_COLOR,
-            dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_DST_COLOR,
+            blend_enable: 1,
+            src_color_blend_factor: vk::BlendFactor::SRC_ALPHA,
+            dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
             color_blend_op: vk::BlendOp::ADD,
-            src_alpha_blend_factor: vk::BlendFactor::ZERO,
-            dst_alpha_blend_factor: vk::BlendFactor::ZERO,
+            src_alpha_blend_factor: vk::BlendFactor::ONE,
+            dst_alpha_blend_factor: vk::BlendFactor::ONE,
             alpha_blend_op: vk::BlendOp::ADD,
             color_write_mask: vk::ColorComponentFlags::RGBA,
         }];
@@ -1109,10 +1109,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             let current_swapchain_image = base.get_next_swapchain_image_index();
             let frame = base.increment_frame();
 
-            let distance_from_zero = (frame as f32 / 20.0).sin() / 2.0 + 0.5;
+            for quad_id in 0..quads.quad_quantity() {
+                let distance_from_zero = (frame as f32 / ((quad_id as f32 + 1.0) * 43.0)).sin() / 2.0 + 0.5;
 
-            quads.modify_quad(0, make_quad_vertices(-distance_from_zero, -distance_from_zero, distance_from_zero * 2.0, distance_from_zero * 2.0));
-            quads.modify_quad(1, make_quad_vertices(0.0, 0.0, distance_from_zero * 2.0, distance_from_zero * 2.0));
+                quads.modify_quad(quad_id, make_quad_vertices(-distance_from_zero, -distance_from_zero, distance_from_zero * 2.0, distance_from_zero * 2.0));
+            }
+
             quads.remap_data();
 
             let (present_index, _) = base

@@ -620,84 +620,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             },
         ];
 
-        let mut quads = CoherentQuads::new(1, base.shared_device());
+        let mut quads = CoherentQuads::new(1, base.shared_device(), base.device_memory_properties);
         quads.add_quad(vertices);
-
-        let index_buffer_memory_req = base.shared_device().lock().unwrap().get_buffer_memory_requirements(quads.device_index_buffer);
-        let index_buffer_memory_index = find_memorytype_index(
-            &index_buffer_memory_req,
-            &base.device_memory_properties,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )
-        .expect("Unable to find suitable memorytype for the index buffer.");
-        let index_allocate_info = vk::MemoryAllocateInfo {
-            allocation_size: index_buffer_memory_req.size,
-            memory_type_index: index_buffer_memory_index,
-            ..Default::default()
-        };
-        let index_buffer_memory = base
-            .shared_device().lock().unwrap()
-            .allocate_memory(&index_allocate_info, None)
-            .unwrap();
-        let index_ptr: *mut c_void = base
-            .shared_device().lock().unwrap()
-            .map_memory(
-                index_buffer_memory,
-                0,
-                index_buffer_memory_req.size,
-                vk::MemoryMapFlags::empty(),
-            )
-            .unwrap();
-        let mut index_slice = Align::new(
-            index_ptr,
-            mem::align_of::<u32>() as u64,
-            index_buffer_memory_req.size,
-        );
-        index_slice.copy_from_slice(&quads.local_index_buffer_data);
-        base.shared_device().lock().unwrap().unmap_memory(index_buffer_memory); // unmapping should only happen at the end with host coherent memory
-        base.shared_device().lock().unwrap()
-            .bind_buffer_memory(quads.device_index_buffer, index_buffer_memory, 0)
-            .unwrap();
-
-        let vertex_input_buffer_memory_req = base
-            .shared_device().lock().unwrap()
-            .get_buffer_memory_requirements(quads.device_vertex_buffer);
-        let vertex_input_buffer_memory_index = find_memorytype_index(
-            &vertex_input_buffer_memory_req,
-            &base.device_memory_properties,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )
-        .expect("Unable to find suitable memorytype for the vertex buffer.");
-
-        let vertex_buffer_allocate_info = vk::MemoryAllocateInfo {
-            allocation_size: vertex_input_buffer_memory_req.size,
-            memory_type_index: vertex_input_buffer_memory_index,
-            ..Default::default()
-        };
-        let vertex_input_buffer_memory = base
-            .shared_device().lock().unwrap()
-            .allocate_memory(&vertex_buffer_allocate_info, None)
-            .unwrap();
-
-        let vert_ptr = base
-            .shared_device().lock().unwrap()
-            .map_memory(
-                vertex_input_buffer_memory,
-                0,
-                vertex_input_buffer_memory_req.size,
-                vk::MemoryMapFlags::empty(),
-            )
-            .unwrap();
-        let mut slice = Align::new(
-            vert_ptr,
-            mem::align_of::<Vertex>() as u64,
-            vertex_input_buffer_memory_req.size,
-        );
-        slice.copy_from_slice(&vertices);
-        base.shared_device().lock().unwrap().unmap_memory(vertex_input_buffer_memory);
-        base.shared_device().lock().unwrap()
-            .bind_buffer_memory(quads.device_vertex_buffer, vertex_input_buffer_memory, 0)
-            .unwrap();
+        quads.remap_data();
 
         let uniform_color_buffer_data = Vector3 {
             x: 1.0,
@@ -1281,10 +1206,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         base.shared_device().lock().unwrap().free_memory(texture_memory, None);
         base.shared_device().lock().unwrap().destroy_image_view(tex_image_view, None);
         base.shared_device().lock().unwrap().destroy_image(texture_image, None);
-        base.shared_device().lock().unwrap().free_memory(index_buffer_memory, None);
         base.shared_device().lock().unwrap().free_memory(uniform_color_buffer_memory, None);
         base.shared_device().lock().unwrap().destroy_buffer(uniform_color_buffer, None);
-        base.shared_device().lock().unwrap().free_memory(vertex_input_buffer_memory, None);
         // intentionally destroy quads here
         drop(quads);
         for &descriptor_set_layout in desc_set_layouts.iter() {

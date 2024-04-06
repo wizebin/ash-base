@@ -1,8 +1,8 @@
-use std::{fmt::{Debug, Formatter}, mem::{self, size_of_val}, sync::{Arc, Mutex}};
+use std::{fmt::{Debug, Formatter}, mem::{self, size_of_val}, os::raw::c_void, sync::{Arc, Mutex}};
 
-use ash::{vk, Device};
+use ash::{util::Align, vk, Device};
 
-use super::vertex::Vertex;
+use super::{memory::find_memorytype_index, vertex::Vertex};
 
 pub struct CoherentQuads {
     pub local_index_buffer_data: Vec<u32>,
@@ -10,6 +10,8 @@ pub struct CoherentQuads {
     pub local_vertex_buffer_data: Vec<Vertex>,
     pub device_vertex_buffer: vk::Buffer,
     pub current_max_quad_quantity: u32,
+    pub index_buffer_memory: vk::DeviceMemory,
+    pub vertex_input_buffer_memory: vk::DeviceMemory,
     pub device: Arc<Mutex<Device>>,
 }
 
@@ -26,7 +28,7 @@ impl Debug for CoherentQuads {
 }
 
 impl CoherentQuads {
-    pub fn new(max_quad_quantity: u32, device: Arc<Mutex<Device>>) -> Self {
+    pub unsafe fn new(max_quad_quantity: u32, device: Arc<Mutex<Device>>, device_memory_properties: vk::PhysicalDeviceMemoryProperties) -> Self {
         let local_vertex_buffer_data: Vec<Vertex> = Vec::with_capacity(max_quad_quantity as usize * 4);
         let local_index_buffer_data: Vec<u32> = Vec::with_capacity(max_quad_quantity as usize * 6);
 
@@ -46,19 +48,46 @@ impl CoherentQuads {
             ..Default::default()
         };
 
-        let (device_index_buffer, device_vertex_buffer) = match device.clone().lock() {
-            Ok(device) => {
-                unsafe {
-                    (
-                        device.create_buffer(&index_buffer_info, None).unwrap(),
-                        device.create_buffer(&vertex_input_buffer_info, None).unwrap()
-                    )
-                }
-            }
-            Err(_) => {
-                panic!("Failed to lock device mutex");
-            }
+        let locked_device = device.clone();
+        let locked_device = locked_device.lock().unwrap();
+
+        let device_index_buffer = locked_device.create_buffer(&index_buffer_info, None).unwrap();
+        let device_vertex_buffer = locked_device.create_buffer(&vertex_input_buffer_info, None).unwrap();
+
+        let index_buffer_memory_req = locked_device.get_buffer_memory_requirements(device_index_buffer);
+        let index_buffer_memory_index = find_memorytype_index(
+            &index_buffer_memory_req,
+            &device_memory_properties,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )
+        .expect("Unable to find suitable memorytype for the index buffer.");
+        let index_allocate_info = vk::MemoryAllocateInfo {
+            allocation_size: index_buffer_memory_req.size,
+            memory_type_index: index_buffer_memory_index,
+            ..Default::default()
         };
+        let index_buffer_memory = locked_device
+            .allocate_memory(&index_allocate_info, None)
+            .unwrap();
+
+        let vertex_input_buffer_memory_req = locked_device
+            .get_buffer_memory_requirements(device_vertex_buffer);
+        let vertex_input_buffer_memory_index = find_memorytype_index(
+            &vertex_input_buffer_memory_req,
+            &device_memory_properties,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )
+        .expect("Unable to find suitable memorytype for the vertex buffer.");
+
+        let vertex_buffer_allocate_info = vk::MemoryAllocateInfo {
+            allocation_size: vertex_input_buffer_memory_req.size,
+            memory_type_index: vertex_input_buffer_memory_index,
+            ..Default::default()
+        };
+        let vertex_input_buffer_memory = locked_device
+            .allocate_memory(&vertex_buffer_allocate_info, None)
+            .unwrap();
+
 
         Self {
             device: device.clone(),
@@ -67,6 +96,8 @@ impl CoherentQuads {
             local_vertex_buffer_data,
             device_vertex_buffer,
             current_max_quad_quantity: max_quad_quantity,
+            index_buffer_memory,
+            vertex_input_buffer_memory,
         }
     }
 
@@ -82,6 +113,61 @@ impl CoherentQuads {
             index_offset,
         ]);
     }
+
+    pub fn remap_data(&mut self) {
+        let device = self.device.as_ref();
+        match device.lock() {
+            Ok(device) => {
+                unsafe {
+                    let index_buffer_memory_req = device.get_buffer_memory_requirements(self.device_index_buffer);
+                    let index_ptr: *mut c_void = device
+                        .map_memory(
+                            self.index_buffer_memory,
+                            0,
+                            index_buffer_memory_req.size,
+                            vk::MemoryMapFlags::empty(),
+                        )
+                        .unwrap();
+                    let mut index_slice = Align::new(
+                        index_ptr,
+                        mem::align_of::<u32>() as u64,
+                        index_buffer_memory_req.size,
+                    );
+                    index_slice.copy_from_slice(&self.local_index_buffer_data);
+                    device.unmap_memory(self.index_buffer_memory);
+
+                    device
+                        .bind_buffer_memory(self.device_index_buffer, self.index_buffer_memory, 0)
+                        .unwrap();
+
+                    let vertex_input_buffer_memory_req = device
+                        .get_buffer_memory_requirements(self.device_vertex_buffer);
+                    let vert_ptr = device
+                        .map_memory(
+                            self.vertex_input_buffer_memory,
+                            0,
+                            vertex_input_buffer_memory_req.size,
+                            vk::MemoryMapFlags::empty(),
+                        )
+                        .unwrap();
+                    let mut slice = Align::new(
+                        vert_ptr,
+                        mem::align_of::<Vertex>() as u64,
+                        vertex_input_buffer_memory_req.size,
+                    );
+                    slice.copy_from_slice(&self.local_vertex_buffer_data);
+                    device.unmap_memory(self.vertex_input_buffer_memory);
+
+                    device
+                        .bind_buffer_memory(self.device_vertex_buffer, self.vertex_input_buffer_memory, 0)
+                        .unwrap();
+                }
+            }
+            Err(_) => {
+                panic!("Failed to lock device mutex");
+            }
+        }
+    }
 }
 
 impl Drop for CoherentQuads {
@@ -92,6 +178,9 @@ impl Drop for CoherentQuads {
                 unsafe {
                     device.destroy_buffer(self.device_index_buffer, None);
                     device.destroy_buffer(self.device_vertex_buffer, None);
+
+                    device.free_memory(self.index_buffer_memory, None);
+                    device.free_memory(self.vertex_input_buffer_memory, None);
                 }
             }
             Err(_) => {

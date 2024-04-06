@@ -73,6 +73,7 @@ pub struct ExampleBase {
     pub setup_commands_reuse_fence: vk::Fence,
 
     pub current_swapchain_image: RefCell<usize>,
+    pub frame: RefCell<usize>,
 }
 
 impl ExampleBase {
@@ -85,6 +86,12 @@ impl ExampleBase {
         *self.current_swapchain_image.borrow_mut() = (current_swapchain_image + 1)
             % self.present_images.len();
         current_swapchain_image
+    }
+
+    pub fn increment_frame(&self) -> usize {
+        let frame = *self.frame.borrow();
+        *self.frame.borrow_mut() = frame + 1;
+        frame
     }
 
     pub fn render_loop<F: Fn()>(&self, f: F) -> Result<(), impl Error> {
@@ -488,6 +495,7 @@ impl ExampleBase {
                 debug_utils_loader,
                 depth_image_memory,
                 current_swapchain_image: RefCell::new(0),
+                frame: RefCell::new(0),
             })
         }
     }
@@ -1092,9 +1100,32 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let graphic_pipeline = graphics_pipelines[0];
 
-
         let _ = base.render_loop(|| {
             let current_swapchain_image = base.get_next_swapchain_image_index();
+            let frame = base.increment_frame();
+
+            let distance_from_zero = (frame as f32 / 100.0).sin() / 2.0 + 0.5;
+            let updated_vertices = [
+                Vertex {
+                    pos: [-1.0 * distance_from_zero, -1.0 * distance_from_zero, 0.75, 1.0],
+                    uv: [0.0, 0.0],
+                },
+                Vertex {
+                    pos: [-1.0 * distance_from_zero, 1.0 * distance_from_zero, 0.75, 1.0],
+                    uv: [0.0, 1.0],
+                },
+                Vertex {
+                    pos: [1.0 * distance_from_zero, 1.0 * distance_from_zero, 0.75, 1.0],
+                    uv: [1.0, 1.0],
+                },
+                Vertex {
+                    pos: [1.0 * distance_from_zero, -1.0 * distance_from_zero, 0.75, 1.0],
+                    uv: [1.0, 0.0],
+                },
+            ];
+
+            quads.modify_quad(0, updated_vertices);
+            quads.remap_data();
 
             let (present_index, _) = base
                 .swapchain_loader
@@ -1209,7 +1240,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         base.shared_device().lock().unwrap().free_memory(uniform_color_buffer_memory, None);
         base.shared_device().lock().unwrap().destroy_buffer(uniform_color_buffer, None);
         // intentionally destroy quads here
-        drop(quads);
+        // drop(quads);
         for &descriptor_set_layout in desc_set_layouts.iter() {
             base.shared_device().lock().unwrap()
                 .destroy_descriptor_set_layout(descriptor_set_layout, None);

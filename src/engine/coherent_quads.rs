@@ -1,4 +1,4 @@
-use std::{fmt::{Debug, Formatter}, mem::{self, size_of_val}, os::raw::c_void, sync::{Arc, Mutex}};
+use std::{cell::RefCell, fmt::{Debug, Formatter}, mem::{self, size_of_val}, os::raw::c_void, sync::{Arc, Mutex}};
 
 use ash::{util::Align, vk, Device};
 
@@ -7,7 +7,7 @@ use super::{memory::find_memorytype_index, vertex::Vertex};
 pub struct CoherentQuads {
     pub local_index_buffer_data: Vec<u32>,
     pub device_index_buffer: vk::Buffer,
-    pub local_vertex_buffer_data: Vec<Vertex>,
+    pub local_vertex_buffer_data: RefCell<Vec<Vertex>>,
     pub device_vertex_buffer: vk::Buffer,
     pub current_max_quad_quantity: u32,
     pub index_buffer_memory: vk::DeviceMemory,
@@ -29,7 +29,7 @@ impl Debug for CoherentQuads {
 
 impl CoherentQuads {
     pub unsafe fn new(max_quad_quantity: u32, device: Arc<Mutex<Device>>, device_memory_properties: vk::PhysicalDeviceMemoryProperties) -> Self {
-        let local_vertex_buffer_data: Vec<Vertex> = Vec::with_capacity(max_quad_quantity as usize * 4);
+        let local_vertex_buffer_data: RefCell<Vec<Vertex>> = RefCell::new(Vec::with_capacity(max_quad_quantity as usize * 4));
         let local_index_buffer_data: Vec<u32> = Vec::with_capacity(max_quad_quantity as usize * 6);
 
         let index_buffer_info = vk::BufferCreateInfo {
@@ -88,6 +88,13 @@ impl CoherentQuads {
             .allocate_memory(&vertex_buffer_allocate_info, None)
             .unwrap();
 
+        locked_device
+            .bind_buffer_memory(device_vertex_buffer, vertex_input_buffer_memory, 0)
+            .unwrap();
+
+        locked_device
+            .bind_buffer_memory(device_index_buffer, index_buffer_memory, 0)
+            .unwrap();
 
         Self {
             device: device.clone(),
@@ -102,8 +109,10 @@ impl CoherentQuads {
     }
 
     pub fn add_quad(&mut self, vertices: [Vertex; 4]) {
-        self.local_vertex_buffer_data.extend_from_slice(&vertices);
-        let index_offset = self.local_vertex_buffer_data.len() as u32 - 4;
+        let mut borrow_data = self.local_vertex_buffer_data.borrow_mut();
+
+        borrow_data.extend_from_slice(&vertices);
+        let index_offset = borrow_data.len() as u32 - 4;
         self.local_index_buffer_data.extend_from_slice(&[
             index_offset,
             index_offset + 1,
@@ -114,7 +123,14 @@ impl CoherentQuads {
         ]);
     }
 
-    pub fn remap_data(&mut self) {
+    pub fn modify_quad(&self, index: usize, vertices: [Vertex; 4]) {
+        let index_offset = index as u32 * 4;
+        let mut borrow_data = self.local_vertex_buffer_data.borrow_mut();
+        borrow_data[index_offset as usize..(index_offset + 4) as usize]
+            .copy_from_slice(&vertices);
+    }
+
+    pub fn remap_data(&self) {
         let device = self.device.as_ref();
         match device.lock() {
             Ok(device) => {
@@ -136,10 +152,6 @@ impl CoherentQuads {
                     index_slice.copy_from_slice(&self.local_index_buffer_data);
                     device.unmap_memory(self.index_buffer_memory);
 
-                    device
-                        .bind_buffer_memory(self.device_index_buffer, self.index_buffer_memory, 0)
-                        .unwrap();
-
                     let vertex_input_buffer_memory_req = device
                         .get_buffer_memory_requirements(self.device_vertex_buffer);
                     let vert_ptr = device
@@ -155,12 +167,8 @@ impl CoherentQuads {
                         mem::align_of::<Vertex>() as u64,
                         vertex_input_buffer_memory_req.size,
                     );
-                    slice.copy_from_slice(&self.local_vertex_buffer_data);
+                    slice.copy_from_slice(&self.local_vertex_buffer_data.borrow());
                     device.unmap_memory(self.vertex_input_buffer_memory);
-
-                    device
-                        .bind_buffer_memory(self.device_vertex_buffer, self.vertex_input_buffer_memory, 0)
-                        .unwrap();
                 }
             }
             Err(_) => {

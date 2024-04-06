@@ -4,3 +4,5 @@ pub mod memory;
 pub mod commandbuffer;
 pub mod debugging;
 pub mod coherent_quads;
+pub mod vulkan_image;
+pub mod dimensions;

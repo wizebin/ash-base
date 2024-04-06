@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vulkan_image::VulkanImage};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -693,60 +693,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             .bind_buffer_memory(uniform_color_buffer, uniform_color_buffer_memory, 0)
             .unwrap();
 
-        let image = image::load_from_memory(include_bytes!("../assets/rust.png"))
-            .unwrap()
-            .to_rgba8();
-        let (width, height) = image.dimensions();
-        let image_extent = vk::Extent2D { width, height };
-        let image_data = image.into_raw();
-        let image_buffer_info = vk::BufferCreateInfo {
-            size: (mem::size_of::<u8>() * image_data.len()) as u64,
-            usage: vk::BufferUsageFlags::TRANSFER_SRC,
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
-            ..Default::default()
-        };
-        let image_buffer = base.shared_device().lock().unwrap().create_buffer(&image_buffer_info, None).unwrap();
-        let image_buffer_memory_req = base.shared_device().lock().unwrap().get_buffer_memory_requirements(image_buffer);
-        let image_buffer_memory_index = find_memorytype_index(
-            &image_buffer_memory_req,
-            &base.device_memory_properties,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )
-        .expect("Unable to find suitable memorytype for the image buffer.");
-
-        let image_buffer_allocate_info = vk::MemoryAllocateInfo {
-            allocation_size: image_buffer_memory_req.size,
-            memory_type_index: image_buffer_memory_index,
-            ..Default::default()
-        };
-        let image_buffer_memory = base
-            .shared_device().lock().unwrap()
-            .allocate_memory(&image_buffer_allocate_info, None)
-            .unwrap();
-        let image_ptr = base
-            .shared_device().lock().unwrap()
-            .map_memory(
-                image_buffer_memory,
-                0,
-                image_buffer_memory_req.size,
-                vk::MemoryMapFlags::empty(),
-            )
-            .unwrap();
-        let mut image_slice = Align::new(
-            image_ptr,
-            mem::align_of::<u8>() as u64,
-            image_buffer_memory_req.size,
-        );
-        image_slice.copy_from_slice(&image_data);
-        base.shared_device().lock().unwrap().unmap_memory(image_buffer_memory);
-        base.shared_device().lock().unwrap()
-            .bind_buffer_memory(image_buffer, image_buffer_memory, 0)
-            .unwrap();
+        let img = VulkanImage::new_from_bytes(include_bytes!("../assets/rust.png"), base.shared_device(), base.device_memory_properties);
 
         let texture_create_info = vk::ImageCreateInfo {
             image_type: vk::ImageType::TYPE_2D,
             format: vk::Format::R8G8B8A8_UNORM,
-            extent: image_extent.into(),
+            extent: img.extent().into(),
             mip_levels: 1,
             array_layers: 1,
             samples: vk::SampleCountFlags::TYPE_1,
@@ -816,11 +768,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                             .aspect_mask(vk::ImageAspectFlags::COLOR)
                             .layer_count(1),
                     )
-                    .image_extent(image_extent.into());
+                    .image_extent(img.extent().into());
 
                 device.cmd_copy_buffer_to_image(
                     texture_command_buffer,
-                    image_buffer,
+                    img.image_buffer,
                     texture_image,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &[buffer_copy_regions],
@@ -1223,8 +1175,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             .destroy_shader_module(vertex_shader_module, None);
         base.shared_device().lock().unwrap()
             .destroy_shader_module(fragment_shader_module, None);
-        base.shared_device().lock().unwrap().free_memory(image_buffer_memory, None);
-        base.shared_device().lock().unwrap().destroy_buffer(image_buffer, None);
         base.shared_device().lock().unwrap().free_memory(texture_memory, None);
         base.shared_device().lock().unwrap().destroy_image_view(tex_image_view, None);
         base.shared_device().lock().unwrap().destroy_image(texture_image, None);

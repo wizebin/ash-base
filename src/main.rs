@@ -34,6 +34,32 @@ use std::os::raw::c_void;
 
 use ash::util::*;
 
+pub fn render_loop<F: Fn()>(event_loop: RefCell<EventLoop<()>>, render: F) -> Result<(), impl Error> {
+    event_loop.borrow_mut().run_on_demand(|event, elwp| {
+        elwp.set_control_flow(ControlFlow::Poll);
+        match event {
+            Event::WindowEvent {
+                event:
+                    WindowEvent::CloseRequested
+                    | WindowEvent::KeyboardInput {
+                        event:
+                            KeyEvent {
+                                state: ElementState::Pressed,
+                                logical_key: Key::Named(NamedKey::Escape),
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } => {
+                elwp.exit();
+            }
+            Event::AboutToWait => render(),
+            _ => (),
+        }
+    })
+}
+
 pub struct ExampleBase {
     pub entry: Entry,
     pub instance: Instance,
@@ -42,7 +68,6 @@ pub struct ExampleBase {
     pub swapchain_loader: swapchain::Device,
     pub debug_utils_loader: debug_utils::Instance,
     pub window: Arc<Mutex<Window>>,
-    pub event_loop: RefCell<EventLoop<()>>,
     pub debug_call_back: vk::DebugUtilsMessengerEXT,
 
     pub pdevice: vk::PhysicalDevice,
@@ -94,49 +119,18 @@ impl ExampleBase {
         frame
     }
 
-    pub fn render_loop<F: Fn()>(&self, render: F) -> Result<(), impl Error> {
-        self.event_loop.borrow_mut().run_on_demand(|event, elwp| {
-            elwp.set_control_flow(ControlFlow::Poll);
-            match event {
-                Event::WindowEvent {
-                    event:
-                        WindowEvent::CloseRequested
-                        | WindowEvent::KeyboardInput {
-                            event:
-                                KeyEvent {
-                                    state: ElementState::Pressed,
-                                    logical_key: Key::Named(NamedKey::Escape),
-                                    ..
-                                },
-                            ..
-                        },
-                    ..
-                } => {
-                    elwp.exit();
-                }
-                Event::AboutToWait => render(),
-                _ => (),
-            }
-        })
-    }
-
-    pub fn new(window_width: u32, window_height: u32) -> Result<Self, Box<dyn Error>> {
+    pub fn new(window: Arc<Mutex<Window>>) -> Result<Self, Box<dyn Error>> {
         unsafe {
-            let app_name = "Ash Grid";
-
-            let event_loop = EventLoop::new()?;
-            let window = Arc::new(Mutex::new(WindowBuilder::new()
-                .with_title("Ash - Example")
-                .with_inner_size(winit::dpi::LogicalSize::new(
-                    f64::from(window_width),
-                    f64::from(window_height),
-                ))
-                .build(&event_loop)
-                .unwrap()));
 
             let entry = Entry::linked();
+            let title = {
+                let locked_window = window.clone();
+                let locked_window = locked_window.lock().unwrap();
+                locked_window.title()
+            };
 
-            let instance = make_vulkan_instance(app_name, &entry, window.clone());
+            // temporary until we move instance creation out of example base, at which point we should set the name separate from the window title
+            let instance = make_vulkan_instance(title.as_str(), &entry, window.clone());
             let instance = match instance {
                 Ok(instance) => instance,
                 Err(err) => {
@@ -244,8 +238,8 @@ impl ExampleBase {
             }
             let surface_resolution = match surface_capabilities.current_extent.width {
                 u32::MAX => vk::Extent2D {
-                    width: window_width,
-                    height: window_height,
+                    width: locked_window.inner_size().width,
+                    height: locked_window.inner_size().height,
                 },
                 _ => surface_capabilities.current_extent,
             };
@@ -435,7 +429,6 @@ impl ExampleBase {
                 ).collect();
 
             Ok(Self {
-                event_loop: RefCell::new(event_loop),
                 entry,
                 instance,
                 device: Arc::new(Mutex::new(device)),
@@ -509,7 +502,20 @@ impl Drop for ExampleBase {
 
 fn main() -> Result<(), Box<dyn Error>> {
     unsafe {
-        let base = ExampleBase::new(1920, 1080)?;
+        let app_name = "Ash Grid";
+
+        let event_loop = RefCell::new(EventLoop::new()?);
+        let window = Arc::new(Mutex::new(WindowBuilder::new()
+            .with_title(app_name)
+            .with_inner_size(winit::dpi::LogicalSize::new(
+                f64::from(800),
+                f64::from(800),
+            ))
+            .build(&event_loop.borrow())
+            .unwrap()));
+
+
+        let base = ExampleBase::new(window.clone())?;
 
         let renderpass_attachments = [
             vk::AttachmentDescription {
@@ -925,7 +931,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let graphic_pipeline = graphics_pipelines[0];
 
-        let _ = base.render_loop(|| {
+        let _ = render_loop(event_loop, || {
             let current_swapchain_image = base.get_next_swapchain_image_index();
             let frame = base.increment_frame();
 

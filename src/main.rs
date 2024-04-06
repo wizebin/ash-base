@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -76,7 +76,7 @@ pub struct ExampleBase {
 }
 
 impl ExampleBase {
-    pub fn lock_device(&self) -> Arc<Mutex<Device>> {
+    pub fn shared_device(&self) -> Arc<Mutex<Device>> {
         self.device.clone()
     }
 
@@ -579,7 +579,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .dependencies(&dependencies);
 
         let renderpass = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .create_render_pass(&renderpass_create_info, None)
             .unwrap();
 
@@ -595,54 +595,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .height(base.surface_resolution.height)
                     .layers(1);
 
-                base.lock_device().lock().unwrap()
+                base.shared_device().lock().unwrap()
                     .create_framebuffer(&frame_buffer_create_info, None)
                     .unwrap()
             })
             .collect();
-        let index_buffer_data = [0u32, 1, 2, 2, 3, 0];
-        let index_buffer_info = vk::BufferCreateInfo {
-            size: mem::size_of_val(&index_buffer_data) as u64,
-            usage: vk::BufferUsageFlags::INDEX_BUFFER,
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
-            ..Default::default()
-        };
-        let index_buffer = base.lock_device().lock().unwrap().create_buffer(&index_buffer_info, None).unwrap();
-        let index_buffer_memory_req = base.lock_device().lock().unwrap().get_buffer_memory_requirements(index_buffer);
-        let index_buffer_memory_index = find_memorytype_index(
-            &index_buffer_memory_req,
-            &base.device_memory_properties,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )
-        .expect("Unable to find suitable memorytype for the index buffer.");
-        let index_allocate_info = vk::MemoryAllocateInfo {
-            allocation_size: index_buffer_memory_req.size,
-            memory_type_index: index_buffer_memory_index,
-            ..Default::default()
-        };
-        let index_buffer_memory = base
-            .lock_device().lock().unwrap()
-            .allocate_memory(&index_allocate_info, None)
-            .unwrap();
-        let index_ptr: *mut c_void = base
-            .lock_device().lock().unwrap()
-            .map_memory(
-                index_buffer_memory,
-                0,
-                index_buffer_memory_req.size,
-                vk::MemoryMapFlags::empty(),
-            )
-            .unwrap();
-        let mut index_slice = Align::new(
-            index_ptr,
-            mem::align_of::<u32>() as u64,
-            index_buffer_memory_req.size,
-        );
-        index_slice.copy_from_slice(&index_buffer_data);
-        base.lock_device().lock().unwrap().unmap_memory(index_buffer_memory); // unmapping should only happen at the end with host coherent memory
-        base.lock_device().lock().unwrap()
-            .bind_buffer_memory(index_buffer, index_buffer_memory, 0)
-            .unwrap();
 
         let vertices = [
             Vertex {
@@ -662,19 +619,49 @@ fn main() -> Result<(), Box<dyn Error>> {
                 uv: [1.0, 0.0],
             },
         ];
-        let vertex_input_buffer_info = vk::BufferCreateInfo {
-            size: mem::size_of_val(&vertices) as u64,
-            usage: vk::BufferUsageFlags::VERTEX_BUFFER,
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
+
+        let mut quads = CoherentQuads::new(1, base.shared_device());
+        quads.add_quad(vertices);
+
+        let index_buffer_memory_req = base.shared_device().lock().unwrap().get_buffer_memory_requirements(quads.device_index_buffer);
+        let index_buffer_memory_index = find_memorytype_index(
+            &index_buffer_memory_req,
+            &base.device_memory_properties,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )
+        .expect("Unable to find suitable memorytype for the index buffer.");
+        let index_allocate_info = vk::MemoryAllocateInfo {
+            allocation_size: index_buffer_memory_req.size,
+            memory_type_index: index_buffer_memory_index,
             ..Default::default()
         };
-        let vertex_input_buffer = base
-            .lock_device().lock().unwrap()
-            .create_buffer(&vertex_input_buffer_info, None)
+        let index_buffer_memory = base
+            .shared_device().lock().unwrap()
+            .allocate_memory(&index_allocate_info, None)
             .unwrap();
+        let index_ptr: *mut c_void = base
+            .shared_device().lock().unwrap()
+            .map_memory(
+                index_buffer_memory,
+                0,
+                index_buffer_memory_req.size,
+                vk::MemoryMapFlags::empty(),
+            )
+            .unwrap();
+        let mut index_slice = Align::new(
+            index_ptr,
+            mem::align_of::<u32>() as u64,
+            index_buffer_memory_req.size,
+        );
+        index_slice.copy_from_slice(&quads.local_index_buffer_data);
+        base.shared_device().lock().unwrap().unmap_memory(index_buffer_memory); // unmapping should only happen at the end with host coherent memory
+        base.shared_device().lock().unwrap()
+            .bind_buffer_memory(quads.device_index_buffer, index_buffer_memory, 0)
+            .unwrap();
+
         let vertex_input_buffer_memory_req = base
-            .lock_device().lock().unwrap()
-            .get_buffer_memory_requirements(vertex_input_buffer);
+            .shared_device().lock().unwrap()
+            .get_buffer_memory_requirements(quads.device_vertex_buffer);
         let vertex_input_buffer_memory_index = find_memorytype_index(
             &vertex_input_buffer_memory_req,
             &base.device_memory_properties,
@@ -688,12 +675,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             ..Default::default()
         };
         let vertex_input_buffer_memory = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .allocate_memory(&vertex_buffer_allocate_info, None)
             .unwrap();
 
         let vert_ptr = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .map_memory(
                 vertex_input_buffer_memory,
                 0,
@@ -707,9 +694,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             vertex_input_buffer_memory_req.size,
         );
         slice.copy_from_slice(&vertices);
-        base.lock_device().lock().unwrap().unmap_memory(vertex_input_buffer_memory);
-        base.lock_device().lock().unwrap()
-            .bind_buffer_memory(vertex_input_buffer, vertex_input_buffer_memory, 0)
+        base.shared_device().lock().unwrap().unmap_memory(vertex_input_buffer_memory);
+        base.shared_device().lock().unwrap()
+            .bind_buffer_memory(quads.device_vertex_buffer, vertex_input_buffer_memory, 0)
             .unwrap();
 
         let uniform_color_buffer_data = Vector3 {
@@ -725,11 +712,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             ..Default::default()
         };
         let uniform_color_buffer = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .create_buffer(&uniform_color_buffer_info, None)
             .unwrap();
         let uniform_color_buffer_memory_req = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .get_buffer_memory_requirements(uniform_color_buffer);
         let uniform_color_buffer_memory_index = find_memorytype_index(
             &uniform_color_buffer_memory_req,
@@ -744,11 +731,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             ..Default::default()
         };
         let uniform_color_buffer_memory = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .allocate_memory(&uniform_color_buffer_allocate_info, None)
             .unwrap();
         let uniform_ptr = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .map_memory(
                 uniform_color_buffer_memory,
                 0,
@@ -762,8 +749,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             uniform_color_buffer_memory_req.size,
         );
         uniform_aligned_slice.copy_from_slice(&[uniform_color_buffer_data]);
-        base.lock_device().lock().unwrap().unmap_memory(uniform_color_buffer_memory);
-        base.lock_device().lock().unwrap()
+        base.shared_device().lock().unwrap().unmap_memory(uniform_color_buffer_memory);
+        base.shared_device().lock().unwrap()
             .bind_buffer_memory(uniform_color_buffer, uniform_color_buffer_memory, 0)
             .unwrap();
 
@@ -779,8 +766,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             sharing_mode: vk::SharingMode::EXCLUSIVE,
             ..Default::default()
         };
-        let image_buffer = base.lock_device().lock().unwrap().create_buffer(&image_buffer_info, None).unwrap();
-        let image_buffer_memory_req = base.lock_device().lock().unwrap().get_buffer_memory_requirements(image_buffer);
+        let image_buffer = base.shared_device().lock().unwrap().create_buffer(&image_buffer_info, None).unwrap();
+        let image_buffer_memory_req = base.shared_device().lock().unwrap().get_buffer_memory_requirements(image_buffer);
         let image_buffer_memory_index = find_memorytype_index(
             &image_buffer_memory_req,
             &base.device_memory_properties,
@@ -794,11 +781,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             ..Default::default()
         };
         let image_buffer_memory = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .allocate_memory(&image_buffer_allocate_info, None)
             .unwrap();
         let image_ptr = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .map_memory(
                 image_buffer_memory,
                 0,
@@ -812,8 +799,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             image_buffer_memory_req.size,
         );
         image_slice.copy_from_slice(&image_data);
-        base.lock_device().lock().unwrap().unmap_memory(image_buffer_memory);
-        base.lock_device().lock().unwrap()
+        base.shared_device().lock().unwrap().unmap_memory(image_buffer_memory);
+        base.shared_device().lock().unwrap()
             .bind_buffer_memory(image_buffer, image_buffer_memory, 0)
             .unwrap();
 
@@ -830,10 +817,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             ..Default::default()
         };
         let texture_image = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .create_image(&texture_create_info, None)
             .unwrap();
-        let texture_memory_req = base.lock_device().lock().unwrap().get_image_memory_requirements(texture_image);
+        let texture_memory_req = base.shared_device().lock().unwrap().get_image_memory_requirements(texture_image);
         let texture_memory_index = find_memorytype_index(
             &texture_memory_req,
             &base.device_memory_properties,
@@ -847,15 +834,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             ..Default::default()
         };
         let texture_memory = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .allocate_memory(&texture_allocate_info, None)
             .unwrap();
-        base.lock_device().lock().unwrap()
+        base.shared_device().lock().unwrap()
             .bind_image_memory(texture_image, texture_memory, 0)
             .expect("Unable to bind depth image memory");
 
         record_submit_commandbuffer(
-            &base.lock_device().lock().unwrap(),
+            &base.shared_device().lock().unwrap(),
             base.setup_command_buffer,
             base.setup_commands_reuse_fence,
             base.present_queue,
@@ -938,7 +925,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             ..Default::default()
         };
 
-        let sampler = base.lock_device().lock().unwrap().create_sampler(&sampler_info, None).unwrap();
+        let sampler = base.shared_device().lock().unwrap().create_sampler(&sampler_info, None).unwrap();
 
         let tex_image_view_info = vk::ImageViewCreateInfo {
             view_type: vk::ImageViewType::TYPE_2D,
@@ -959,7 +946,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             ..Default::default()
         };
         let tex_image_view = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .create_image_view(&tex_image_view_info, None)
             .unwrap();
         let descriptor_sizes = [
@@ -977,7 +964,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .max_sets(1);
 
         let descriptor_pool = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .create_descriptor_pool(&descriptor_pool_info, None)
             .unwrap();
         let desc_layout_bindings = [
@@ -999,7 +986,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             vk::DescriptorSetLayoutCreateInfo::default().bindings(&desc_layout_bindings);
 
         let desc_set_layouts = [base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .create_descriptor_set_layout(&descriptor_info, None)
             .unwrap()];
 
@@ -1007,7 +994,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .descriptor_pool(descriptor_pool)
             .set_layouts(&desc_set_layouts);
         let descriptor_sets = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .allocate_descriptor_sets(&desc_alloc_info)
             .unwrap();
 
@@ -1040,7 +1027,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 ..Default::default()
             },
         ];
-        base.lock_device().lock().unwrap().update_descriptor_sets(&write_desc_sets, &[]);
+        base.shared_device().lock().unwrap().update_descriptor_sets(&write_desc_sets, &[]);
 
         let mut vertex_spv_file = Cursor::new(&include_bytes!("../shader/texture/vert.spv")[..]);
         let mut frag_spv_file = Cursor::new(&include_bytes!("../shader/texture/frag.spv")[..]);
@@ -1054,12 +1041,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         let frag_shader_info = vk::ShaderModuleCreateInfo::default().code(&frag_code);
 
         let vertex_shader_module = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .create_shader_module(&vertex_shader_info, None)
             .expect("Vertex shader module error");
 
         let fragment_shader_module = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .create_shader_module(&frag_shader_info, None)
             .expect("Fragment shader module error");
 
@@ -1067,7 +1054,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             vk::PipelineLayoutCreateInfo::default().set_layouts(&desc_set_layouts);
 
         let pipeline_layout = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .create_pipeline_layout(&layout_create_info, None)
             .unwrap();
 
@@ -1174,7 +1161,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .render_pass(renderpass);
 
         let graphics_pipelines = base
-            .lock_device().lock().unwrap()
+            .shared_device().lock().unwrap()
             .create_graphics_pipelines(vk::PipelineCache::null(), &[graphic_pipeline_infos], None)
             .unwrap();
 
@@ -1214,7 +1201,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .clear_values(&clear_values);
 
             record_submit_commandbuffer(
-                &base.lock_device().lock().unwrap(),
+                &base.shared_device().lock().unwrap(),
                 base.draw_command_buffer,
                 base.draw_commands_reuse_fence,
                 base.present_queue,
@@ -1245,18 +1232,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                     device.cmd_bind_vertex_buffers(
                         draw_command_buffer,
                         0,
-                        &[vertex_input_buffer],
+                        &[quads.device_vertex_buffer],
                         &[0],
                     );
                     device.cmd_bind_index_buffer(
                         draw_command_buffer,
-                        index_buffer,
+                        quads.device_index_buffer,
                         0,
                         vk::IndexType::UINT32,
                     );
                     device.cmd_draw_indexed(
                         draw_command_buffer,
-                        index_buffer_data.len() as u32,
+                        quads.local_index_buffer_data.len() as u32,
                         1,
                         0,
                         0,
@@ -1279,37 +1266,37 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .queue_present(base.present_queue, &present_info)
                 .unwrap();
         });
-        base.lock_device().lock().unwrap().device_wait_idle().unwrap();
+        base.shared_device().lock().unwrap().device_wait_idle().unwrap();
 
         for pipeline in graphics_pipelines {
-            base.lock_device().lock().unwrap().destroy_pipeline(pipeline, None);
+            base.shared_device().lock().unwrap().destroy_pipeline(pipeline, None);
         }
-        base.lock_device().lock().unwrap().destroy_pipeline_layout(pipeline_layout, None);
-        base.lock_device().lock().unwrap()
+        base.shared_device().lock().unwrap().destroy_pipeline_layout(pipeline_layout, None);
+        base.shared_device().lock().unwrap()
             .destroy_shader_module(vertex_shader_module, None);
-        base.lock_device().lock().unwrap()
+        base.shared_device().lock().unwrap()
             .destroy_shader_module(fragment_shader_module, None);
-        base.lock_device().lock().unwrap().free_memory(image_buffer_memory, None);
-        base.lock_device().lock().unwrap().destroy_buffer(image_buffer, None);
-        base.lock_device().lock().unwrap().free_memory(texture_memory, None);
-        base.lock_device().lock().unwrap().destroy_image_view(tex_image_view, None);
-        base.lock_device().lock().unwrap().destroy_image(texture_image, None);
-        base.lock_device().lock().unwrap().free_memory(index_buffer_memory, None);
-        base.lock_device().lock().unwrap().destroy_buffer(index_buffer, None);
-        base.lock_device().lock().unwrap().free_memory(uniform_color_buffer_memory, None);
-        base.lock_device().lock().unwrap().destroy_buffer(uniform_color_buffer, None);
-        base.lock_device().lock().unwrap().free_memory(vertex_input_buffer_memory, None);
-        base.lock_device().lock().unwrap().destroy_buffer(vertex_input_buffer, None);
+        base.shared_device().lock().unwrap().free_memory(image_buffer_memory, None);
+        base.shared_device().lock().unwrap().destroy_buffer(image_buffer, None);
+        base.shared_device().lock().unwrap().free_memory(texture_memory, None);
+        base.shared_device().lock().unwrap().destroy_image_view(tex_image_view, None);
+        base.shared_device().lock().unwrap().destroy_image(texture_image, None);
+        base.shared_device().lock().unwrap().free_memory(index_buffer_memory, None);
+        base.shared_device().lock().unwrap().free_memory(uniform_color_buffer_memory, None);
+        base.shared_device().lock().unwrap().destroy_buffer(uniform_color_buffer, None);
+        base.shared_device().lock().unwrap().free_memory(vertex_input_buffer_memory, None);
+        // intentionally destroy quads here
+        drop(quads);
         for &descriptor_set_layout in desc_set_layouts.iter() {
-            base.lock_device().lock().unwrap()
+            base.shared_device().lock().unwrap()
                 .destroy_descriptor_set_layout(descriptor_set_layout, None);
         }
-        base.lock_device().lock().unwrap().destroy_descriptor_pool(descriptor_pool, None);
-        base.lock_device().lock().unwrap().destroy_sampler(sampler, None);
+        base.shared_device().lock().unwrap().destroy_descriptor_pool(descriptor_pool, None);
+        base.shared_device().lock().unwrap().destroy_sampler(sampler, None);
         for framebuffer in framebuffers {
-            base.lock_device().lock().unwrap().destroy_framebuffer(framebuffer, None);
+            base.shared_device().lock().unwrap().destroy_framebuffer(framebuffer, None);
         }
-        base.lock_device().lock().unwrap().destroy_render_pass(renderpass, None);
+        base.shared_device().lock().unwrap().destroy_render_pass(renderpass, None);
 
         Ok(())
     }

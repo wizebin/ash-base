@@ -7,6 +7,8 @@
     unused_qualifications
 )]
 
+mod engine;
+
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char,
 };
@@ -16,6 +18,7 @@ use ash::{
     khr::{surface, swapchain},
     vk, Device, Entry, Instance,
 };
+use engine::{vec3::{self, Vector3}, vertex::{self, Vertex}};
 use winit::{
     event::{ElementState, Event, KeyEvent, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -30,20 +33,6 @@ use std::mem;
 use std::os::raw::c_void;
 
 use ash::util::*;
-
-#[derive(Clone, Debug, Copy)]
-struct Vertex {
-    pos: [f32; 4],
-    uv: [f32; 2],
-}
-
-#[derive(Clone, Debug, Copy)]
-pub struct Vector3 {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub _pad: f32,
-}
 
 // Simple offset_of macro akin to C++ offsetof
 #[macro_export]

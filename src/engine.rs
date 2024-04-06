@@ -6,3 +6,4 @@ pub mod debugging;
 pub mod coherent_quads;
 pub mod vulkan_image;
 pub mod dimensions;
+pub mod vulkan_texture;

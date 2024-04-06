@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vulkan_image::VulkanImage};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vulkan_image::VulkanImage, vulkan_texture::VulkanTexture};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -694,43 +694,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .unwrap();
 
         let img = VulkanImage::new_from_bytes(include_bytes!("../assets/rust.png"), base.shared_device(), base.device_memory_properties);
-
-        let texture_create_info = vk::ImageCreateInfo {
-            image_type: vk::ImageType::TYPE_2D,
-            format: vk::Format::R8G8B8A8_UNORM,
-            extent: img.extent().into(),
-            mip_levels: 1,
-            array_layers: 1,
-            samples: vk::SampleCountFlags::TYPE_1,
-            tiling: vk::ImageTiling::OPTIMAL,
-            usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
-            ..Default::default()
-        };
-        let texture_image = base
-            .shared_device().lock().unwrap()
-            .create_image(&texture_create_info, None)
-            .unwrap();
-        let texture_memory_req = base.shared_device().lock().unwrap().get_image_memory_requirements(texture_image);
-        let texture_memory_index = find_memorytype_index(
-            &texture_memory_req,
-            &base.device_memory_properties,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )
-        .expect("Unable to find suitable memory index for depth image.");
-
-        let texture_allocate_info = vk::MemoryAllocateInfo {
-            allocation_size: texture_memory_req.size,
-            memory_type_index: texture_memory_index,
-            ..Default::default()
-        };
-        let texture_memory = base
-            .shared_device().lock().unwrap()
-            .allocate_memory(&texture_allocate_info, None)
-            .unwrap();
-        base.shared_device().lock().unwrap()
-            .bind_image_memory(texture_image, texture_memory, 0)
-            .expect("Unable to bind depth image memory");
+        let tex = VulkanTexture::new_from_image(&img, base.shared_device(), base.device_memory_properties);
+        let image_extent = img.extent();
 
         record_submit_commandbuffer(
             &base.shared_device().lock().unwrap(),
@@ -744,7 +709,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let texture_barrier = vk::ImageMemoryBarrier {
                     dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
                     new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    image: texture_image,
+                    image: tex.texture_image,
                     subresource_range: vk::ImageSubresourceRange {
                         aspect_mask: vk::ImageAspectFlags::COLOR,
                         level_count: 1,
@@ -768,12 +733,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                             .aspect_mask(vk::ImageAspectFlags::COLOR)
                             .layer_count(1),
                     )
-                    .image_extent(img.extent().into());
+                    .image_extent(image_extent.into());
 
                 device.cmd_copy_buffer_to_image(
                     texture_command_buffer,
                     img.image_buffer,
-                    texture_image,
+                    tex.texture_image,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &[buffer_copy_regions],
                 );
@@ -782,7 +747,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     dst_access_mask: vk::AccessFlags::SHADER_READ,
                     old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    image: texture_image,
+                    image: tex.texture_image,
                     subresource_range: vk::ImageSubresourceRange {
                         aspect_mask: vk::ImageAspectFlags::COLOR,
                         level_count: 1,
@@ -820,7 +785,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let tex_image_view_info = vk::ImageViewCreateInfo {
             view_type: vk::ImageViewType::TYPE_2D,
-            format: texture_create_info.format,
+            format: tex.format,
             components: vk::ComponentMapping {
                 r: vk::ComponentSwizzle::R,
                 g: vk::ComponentSwizzle::G,
@@ -833,7 +798,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 layer_count: 1,
                 ..Default::default()
             },
-            image: texture_image,
+            image: tex.texture_image,
             ..Default::default()
         };
         let tex_image_view = base
@@ -1175,9 +1140,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .destroy_shader_module(vertex_shader_module, None);
         base.shared_device().lock().unwrap()
             .destroy_shader_module(fragment_shader_module, None);
-        base.shared_device().lock().unwrap().free_memory(texture_memory, None);
         base.shared_device().lock().unwrap().destroy_image_view(tex_image_view, None);
-        base.shared_device().lock().unwrap().destroy_image(texture_image, None);
         base.shared_device().lock().unwrap().free_memory(uniform_color_buffer_memory, None);
         base.shared_device().lock().unwrap().destroy_buffer(uniform_color_buffer, None);
         // intentionally destroy quads here

@@ -632,9 +632,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let vertices = make_quad_vertices(0.0, 0.0, 0.5, 0.5);
 
-        let mut quads = CoherentQuads::new(2, base.shared_device(), base.device_memory_properties);
-        quads.add_quad(vertices);
-        quads.add_quad(vertices.clone());
+        let mut quads = CoherentQuads::new(10, base.shared_device(), base.device_memory_properties);
+        for _ in 0..10 {
+            quads.add_quad(vertices.clone());
+        }
         quads.remap_data();
 
         let uniform_color_buffer_data = Vector3 {
@@ -1112,7 +1113,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             for quad_id in 0..quads.quad_quantity() {
                 let distance_from_zero = (frame as f32 / ((quad_id as f32 + 1.0) * 43.0)).sin() / 2.0 + 0.5;
 
-                quads.modify_quad(quad_id, make_quad_vertices(-distance_from_zero, -distance_from_zero, distance_from_zero * 2.0, distance_from_zero * 2.0));
+                quads.modify_quad(quad_id, make_quad_vertices(quad_id as f32 / quads.quad_quantity() as f32 - 1.0, -distance_from_zero, distance_from_zero * 2.0, distance_from_zero * 2.0));
             }
 
             quads.remap_data();

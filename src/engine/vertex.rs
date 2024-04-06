@@ -1,4 +1,5 @@
 use ash::vk;
+use std::mem;
 
 use crate::offset_of;
 

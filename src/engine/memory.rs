@@ -1,4 +1,5 @@
 use ash::vk;
+use std::mem;
 
 // Simple offset_of macro akin to C++ offsetof
 #[macro_export]

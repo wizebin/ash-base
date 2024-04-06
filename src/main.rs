@@ -634,7 +634,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             index_buffer_memory_req.size,
         );
         index_slice.copy_from_slice(&index_buffer_data);
-        base.device.unmap_memory(index_buffer_memory);
+        base.device.unmap_memory(index_buffer_memory); // unmapping should only happen at the end with host coherent memory
         base.device
             .bind_buffer_memory(index_buffer, index_buffer_memory, 0)
             .unwrap();
@@ -1086,20 +1086,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             stride: mem::size_of::<Vertex>() as u32,
             input_rate: vk::VertexInputRate::VERTEX,
         }];
-        let vertex_input_attribute_descriptions = [
-            vk::VertexInputAttributeDescription {
-                location: 0,
-                binding: 0,
-                format: vk::Format::R32G32B32A32_SFLOAT,
-                offset: offset_of!(Vertex, pos) as u32,
-            },
-            vk::VertexInputAttributeDescription {
-                location: 1,
-                binding: 0,
-                format: vk::Format::R32G32_SFLOAT,
-                offset: offset_of!(Vertex, uv) as u32,
-            },
-        ];
+        let vertex_input_attribute_descriptions = Vertex::get_attribute_descriptions();
         let vertex_input_state_info = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_attribute_descriptions(&vertex_input_attribute_descriptions)
             .vertex_binding_descriptions(&vertex_input_binding_descriptions);

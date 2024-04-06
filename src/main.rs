@@ -811,11 +811,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .allocate_descriptor_sets(&desc_alloc_info)
             .unwrap();
 
-        let uniform_color_buffer_descriptor = vk::DescriptorBufferInfo {
-            buffer: ubo.uniform_color_buffer,
-            offset: 0,
-            range: mem::size_of_val(&uniform_color_buffer_data) as u64,
-        };
+        let uniform_color_buffer_descriptor = ubo.get_descriptor_info(0);
 
         let tex_descriptor = vk::DescriptorImageInfo {
             image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,

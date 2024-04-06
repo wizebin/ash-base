@@ -12,6 +12,7 @@ pub struct VulkanUniformBufferObject {
   pub device: Arc<Mutex<Device>>,
   pub uniform_color_buffer: vk::Buffer,
   pub uniform_color_buffer_memory: vk::DeviceMemory,
+  pub color_vector: Vector3,
 }
 
 impl VulkanUniformBufferObject {
@@ -66,10 +67,20 @@ impl VulkanUniformBufferObject {
         .unwrap();
 
     Self {
+        color_vector: uniform_color_buffer_data,
         device: device.clone(),
         uniform_color_buffer,
         uniform_color_buffer_memory,
     }
+  }
+
+  pub fn get_descriptor_info(&self, offset: u64) -> vk::DescriptorBufferInfo {
+    vk::DescriptorBufferInfo {
+        buffer: self.uniform_color_buffer,
+        offset,
+        range: mem::size_of_val(&self.color_vector) as u64,
+    }
+
   }
 }
 

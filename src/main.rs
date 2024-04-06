@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vulkan_image::VulkanImage, vulkan_texture::VulkanTexture};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vulkan_image::VulkanImage, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -644,58 +644,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             z: 1.0,
             _pad: 0.0,
         };
-        let uniform_color_buffer_info = vk::BufferCreateInfo {
-            size: mem::size_of_val(&uniform_color_buffer_data) as u64,
-            usage: vk::BufferUsageFlags::UNIFORM_BUFFER,
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
-            ..Default::default()
-        };
-        let uniform_color_buffer = base
-            .shared_device().lock().unwrap()
-            .create_buffer(&uniform_color_buffer_info, None)
-            .unwrap();
-        let uniform_color_buffer_memory_req = base
-            .shared_device().lock().unwrap()
-            .get_buffer_memory_requirements(uniform_color_buffer);
-        let uniform_color_buffer_memory_index = find_memorytype_index(
-            &uniform_color_buffer_memory_req,
-            &base.device_memory_properties,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )
-        .expect("Unable to find suitable memorytype for the vertex buffer.");
 
-        let uniform_color_buffer_allocate_info = vk::MemoryAllocateInfo {
-            allocation_size: uniform_color_buffer_memory_req.size,
-            memory_type_index: uniform_color_buffer_memory_index,
-            ..Default::default()
-        };
-        let uniform_color_buffer_memory = base
-            .shared_device().lock().unwrap()
-            .allocate_memory(&uniform_color_buffer_allocate_info, None)
-            .unwrap();
-        let uniform_ptr = base
-            .shared_device().lock().unwrap()
-            .map_memory(
-                uniform_color_buffer_memory,
-                0,
-                uniform_color_buffer_memory_req.size,
-                vk::MemoryMapFlags::empty(),
-            )
-            .unwrap();
-        let mut uniform_aligned_slice = Align::new(
-            uniform_ptr,
-            mem::align_of::<Vector3>() as u64,
-            uniform_color_buffer_memory_req.size,
-        );
-        uniform_aligned_slice.copy_from_slice(&[uniform_color_buffer_data]);
-        base.shared_device().lock().unwrap().unmap_memory(uniform_color_buffer_memory);
-        base.shared_device().lock().unwrap()
-            .bind_buffer_memory(uniform_color_buffer, uniform_color_buffer_memory, 0)
-            .unwrap();
+        let ubo = VulkanUniformBufferObject::new_from_vec3(uniform_color_buffer_data, base.shared_device(), base.device_memory_properties);
 
         let img = VulkanImage::new_from_bytes(include_bytes!("../assets/rust.png"), base.shared_device(), base.device_memory_properties);
         let tex = VulkanTexture::new_from_image(&img, base.shared_device(), base.device_memory_properties);
         let image_extent = img.extent();
+
+        // let img2 = VulkanImage::new_from_bytes(include_bytes!("../assets/rust_2.png"), base.shared_device(), base.device_memory_properties);
+        // let tex2 = VulkanTexture::new_from_image(&img2, base.shared_device(), base.device_memory_properties);
 
         record_submit_commandbuffer(
             &base.shared_device().lock().unwrap(),
@@ -855,7 +812,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .unwrap();
 
         let uniform_color_buffer_descriptor = vk::DescriptorBufferInfo {
-            buffer: uniform_color_buffer,
+            buffer: ubo.uniform_color_buffer,
             offset: 0,
             range: mem::size_of_val(&uniform_color_buffer_data) as u64,
         };
@@ -1141,8 +1098,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         base.shared_device().lock().unwrap()
             .destroy_shader_module(fragment_shader_module, None);
         base.shared_device().lock().unwrap().destroy_image_view(tex_image_view, None);
-        base.shared_device().lock().unwrap().free_memory(uniform_color_buffer_memory, None);
-        base.shared_device().lock().unwrap().destroy_buffer(uniform_color_buffer, None);
         // intentionally destroy quads here
         // drop(quads);
         for &descriptor_set_layout in desc_set_layouts.iter() {

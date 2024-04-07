@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::make_logical_device, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::{vulkan_debug_callback, VulkanDebugger}, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::make_logical_device, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_surface_capabilities::{get_standard_surface_image_count, get_surface_capabilities, get_surface_capabilities_pre_transform}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -66,10 +66,9 @@ pub struct ExampleBase {
     pub device: Arc<Mutex<Device>>,
     pub surface_loader: surface::Instance,
     pub swapchain_loader: swapchain::Device,
-    pub debug_utils_loader: debug_utils::Instance,
     pub window: Arc<Mutex<Window>>,
-    pub debug_call_back: vk::DebugUtilsMessengerEXT,
     pub depth_image: Option<VulkanDepthImage>,
+    pub debugger: Option<VulkanDebugger>,
 
     pub pdevice: vk::PhysicalDevice,
     pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
@@ -139,23 +138,8 @@ impl ExampleBase {
             let locked_window = window.clone();
             let locked_window = locked_window.lock().unwrap();
 
-            let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
-                .message_severity(
-                    vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
-                )
-                .message_type(
-                    vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-                        | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
-                        | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
-                )
-                .pfn_user_callback(Some(vulkan_debug_callback));
+            let debugger = VulkanDebugger::new(&entry, &instance);
 
-            let debug_utils_loader = debug_utils::Instance::new(&entry, &instance);
-            let debug_call_back = debug_utils_loader
-                .create_debug_utils_messenger(&debug_info, None)
-                .unwrap();
             let surface = ash_window::create_surface(
                 &entry,
                 &instance,
@@ -164,7 +148,6 @@ impl ExampleBase {
                 None,
             )
             .unwrap();
-
             let surface_loader = surface::Instance::new(&entry, &instance);
             let (pdevice, queue_family_index) = get_physical_device_and_family_that_support(&instance, &surface_loader, surface);
             let device = make_logical_device(&instance, pdevice, queue_family_index);
@@ -177,15 +160,8 @@ impl ExampleBase {
                 .get_physical_device_surface_formats(pdevice, surface)
                 .unwrap()[0];
 
-            let surface_capabilities = surface_loader
-                .get_physical_device_surface_capabilities(pdevice, surface)
-                .unwrap();
-            let mut desired_image_count = surface_capabilities.min_image_count + 1;
-            if surface_capabilities.max_image_count > 0
-                && desired_image_count > surface_capabilities.max_image_count
-            {
-                desired_image_count = surface_capabilities.max_image_count;
-            }
+            let surface_capabilities = get_surface_capabilities(&pdevice, &surface_loader, surface);
+            let desired_image_count = get_standard_surface_image_count(&surface_capabilities);
             let surface_resolution = match surface_capabilities.current_extent.width {
                 u32::MAX => vk::Extent2D {
                     width: locked_window.inner_size().width,
@@ -193,14 +169,7 @@ impl ExampleBase {
                 },
                 _ => surface_capabilities.current_extent,
             };
-            let pre_transform = if surface_capabilities
-                .supported_transforms
-                .contains(vk::SurfaceTransformFlagsKHR::IDENTITY)
-            {
-                vk::SurfaceTransformFlagsKHR::IDENTITY
-            } else {
-                surface_capabilities.current_transform
-            };
+            let pre_transform = get_surface_capabilities_pre_transform(&surface_capabilities);
             let swapchain_loader = swapchain::Device::new(&instance, &locked_device);
 
             let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
@@ -354,11 +323,10 @@ impl ExampleBase {
                 draw_commands_reuse_fence,
                 setup_commands_reuse_fence,
                 surface,
-                debug_call_back,
-                debug_utils_loader,
                 current_swapchain_image: RefCell::new(0),
                 frame: RefCell::new(0),
                 depth_image: Some(depth_img),
+                debugger: Some(debugger),
             })
         }
     }
@@ -392,8 +360,7 @@ impl Drop for ExampleBase {
                 .destroy_swapchain(self.swapchain, None);
             device.destroy_device(None);
             self.surface_loader.destroy_surface(self.surface, None);
-            self.debug_utils_loader
-                .destroy_debug_utils_messenger(self.debug_call_back, None);
+            self.debugger = None;
             self.instance.destroy_instance(None);
         }
     }

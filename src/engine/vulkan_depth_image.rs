@@ -9,6 +9,7 @@ pub struct VulkanDepthImage {
     pub depth_image: vk::Image,
     pub depth_image_view: vk::ImageView,
     pub depth_image_memory: vk::DeviceMemory,
+    pub dropped: bool,
 }
 
 impl VulkanDepthImage {
@@ -68,12 +69,15 @@ impl VulkanDepthImage {
             depth_image,
             depth_image_memory,
             depth_image_view,
+            dropped: false,
         }
     }
-}
 
-impl Drop for VulkanDepthImage {
-    fn drop(&mut self) {
+    pub fn intentionally_free(&mut self) {
+        if self.dropped {
+            return;
+        }
+
         unsafe {
             let locked_device = self.device.clone();
             let locked_device = locked_device.lock().unwrap();
@@ -81,6 +85,13 @@ impl Drop for VulkanDepthImage {
             locked_device.free_memory(self.depth_image_memory, None);
             locked_device.destroy_image_view(self.depth_image_view, None);
             locked_device.destroy_image(self.depth_image, None);
+            self.dropped = true;
         }
+    }
+}
+
+impl Drop for VulkanDepthImage {
+    fn drop(&mut self) {
+        self.intentionally_free();
     }
 }

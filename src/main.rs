@@ -69,7 +69,7 @@ pub struct ExampleBase {
     pub debug_utils_loader: debug_utils::Instance,
     pub window: Arc<Mutex<Window>>,
     pub debug_call_back: vk::DebugUtilsMessengerEXT,
-    pub depth_image: VulkanDepthImage,
+    pub depth_image: Option<VulkanDepthImage>,
 
     pub pdevice: vk::PhysicalDevice,
     pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
@@ -218,7 +218,8 @@ impl ExampleBase {
                 .create_device(pdevice, &device_create_info, None)
                 .unwrap();
             let device = Arc::new(Mutex::new(device));
-            let locked_device = device.lock().unwrap();
+            let locked_device = device.clone(); // temporary until we abstract everything else out, we need the device to be unlocked for the depth image creation
+            let locked_device = locked_device.lock().unwrap(); // temporary until we abstract everything else out, we need the device to be unlocked for the depth image creation
 
             let present_queue = locked_device.get_device_queue(queue_family_index, 0);
 
@@ -322,8 +323,8 @@ impl ExampleBase {
             let device_memory_properties = instance.get_physical_device_memory_properties(pdevice);
             drop(locked_device); // temporary until we abstract everything else out, we need the device to be unlocked for the depth image creation
             let depth_img = VulkanDepthImage::new(surface_resolution, device.clone(), device_memory_properties);
-            let locked_device = device.clone();
-            let locked_device = locked_device.lock().unwrap();
+            let locked_device = device.clone(); // temporary until we abstract everything else out, we need the device to be unlocked for the depth image creation
+            let locked_device = locked_device.lock().unwrap(); // temporary until we abstract everything else out, we need the device to be unlocked for the depth image creation
 
             let fence_create_info =
                 vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
@@ -415,7 +416,7 @@ impl ExampleBase {
                 debug_utils_loader,
                 current_swapchain_image: RefCell::new(0),
                 frame: RefCell::new(0),
-                depth_image: depth_img,
+                depth_image: Some(depth_img),
             })
         }
     }
@@ -423,6 +424,8 @@ impl ExampleBase {
 
 impl Drop for ExampleBase {
     fn drop(&mut self) {
+        self.depth_image = None;
+
         let device = self.device.lock().unwrap();
         unsafe {
             device.device_wait_idle().unwrap();
@@ -516,7 +519,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .present_image_views
             .iter()
             .map(|&present_image_view| {
-                let framebuffer_attachments = [present_image_view, base.depth_image.depth_image_view];
+                let framebuffer_attachments = [present_image_view, base.depth_image.as_ref().unwrap().depth_image_view];
                 let frame_buffer_create_info = vk::FramebufferCreateInfo::default()
                     .render_pass(renderpass)
                     .attachments(&framebuffer_attachments)
@@ -997,8 +1000,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         base.shared_device().lock().unwrap()
             .destroy_shader_module(fragment_shader_module, None);
         base.shared_device().lock().unwrap().destroy_image_view(tex_image_view, None);
-        // intentionally destroy quads here
-        // drop(quads);
+
+        // todo: consider dropping explicitly resources like the depth image here to avoid segfault, OR create the device and instance in an outer scope to guarantee proper destruction order
+        drop(quads);
+
         for &descriptor_set_layout in desc_set_layouts.iter() {
             base.shared_device().lock().unwrap()
                 .destroy_descriptor_set_layout(descriptor_set_layout, None);

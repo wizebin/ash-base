@@ -13,3 +13,4 @@ pub mod vulkan_instance;
 pub mod winit_window;
 pub mod vulkan_depth_image;
 pub mod vulkan_physical_device;
+pub mod vulkan_logical_device;

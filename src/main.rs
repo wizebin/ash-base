@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_physical_device::get_physical_device_and_family_that_support, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::make_logical_device, vulkan_physical_device::get_physical_device_and_family_that_support, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -167,30 +167,7 @@ impl ExampleBase {
 
             let surface_loader = surface::Instance::new(&entry, &instance);
             let (pdevice, queue_family_index) = get_physical_device_and_family_that_support(&instance, &surface_loader, surface);
-            let device_extension_names_raw = [
-                swapchain::NAME.as_ptr(),
-                #[cfg(any(target_os = "macos", target_os = "ios"))]
-                ash::khr::portability_subset::NAME.as_ptr(),
-            ];
-            let features = vk::PhysicalDeviceFeatures {
-                shader_clip_distance: 1,
-                ..Default::default()
-            };
-            let priorities = [1.0];
-
-            let queue_info = vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(queue_family_index)
-                .queue_priorities(&priorities);
-
-            let device_create_info = vk::DeviceCreateInfo::default()
-                .queue_create_infos(std::slice::from_ref(&queue_info))
-                .enabled_extension_names(&device_extension_names_raw)
-                .enabled_features(&features);
-
-            let device: Device = instance
-                .create_device(pdevice, &device_create_info, None)
-                .unwrap();
-            let device = Arc::new(Mutex::new(device));
+            let device = make_logical_device(&instance, pdevice, queue_family_index);
             let locked_device = device.clone(); // temporary until we abstract everything else out, we need the device to be unlocked for the depth image creation
             let locked_device = locked_device.lock().unwrap(); // temporary until we abstract everything else out, we need the device to be unlocked for the depth image creation
 

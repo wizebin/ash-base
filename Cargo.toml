@@ -1,4 +1,5 @@
 [package]
+default-run = "ash-grid"
 name = "ash-grid"
 version = "0.1.0"
 edition = "2021"
@@ -12,3 +13,11 @@ image = "0.25.1"
 rand = "0.8.5"
 raw-window-handle = "0.6.0"
 winit = "0.29.15"
+
+[[bin]]
+name = "build_shaders"
+path = "scripts/build_shaders.rs"
+
+[[bin]]
+name = "ash-grid"
+path = "src/main.rs"

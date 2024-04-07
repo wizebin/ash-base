@@ -576,7 +576,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             })
             .collect();
 
-        let vertices = make_quad_vertices(0.0, 0.0, 0.5, 0.5);
+        let vertices = make_quad_vertices(0.0, 0.0, 0.5, 0.5, 0.0);
 
         let mut quads = CoherentQuads::new(10, base.shared_device(), base.device_memory_properties);
         for _ in 0..10 {
@@ -593,7 +593,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let ubo = VulkanUniformBufferObject::new_from_vec3(uniform_color_buffer_data, base.shared_device(), base.device_memory_properties);
 
-        let img = VulkanImage::new_from_bytes(include_bytes!("../assets/rust.png"), base.shared_device(), base.device_memory_properties);
+        let img = VulkanImage::new_from_bytes(include_bytes!("../assets/rust_2.png"), base.shared_device(), base.device_memory_properties);
         let tex = VulkanTexture::new_from_image(&img, base.shared_device(), base.device_memory_properties);
         let image_extent = img.extent();
 
@@ -928,8 +928,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             for quad_id in 0..quads.quad_quantity() {
                 let distance_from_zero = (frame as f32 / ((quad_id as f32 + 1.0) * 43.0)).sin() / 2.0 + 0.5;
+                let y_position = (frame as f32 / 43.0).sin() / 2.0 - 1.0;
+                let rotation = (frame as f32 / 43.0).cos() / 2.0;
 
-                quads.modify_quad(quad_id, make_quad_vertices(quad_id as f32 / quads.quad_quantity() as f32 - 1.0, -distance_from_zero, distance_from_zero * 2.0, distance_from_zero * 2.0));
+                quads.modify_quad(quad_id, make_quad_vertices(quad_id as f32 / quads.quad_quantity() as f32 - 1.0, y_position, distance_from_zero * 2.0, distance_from_zero * 2.0, rotation));
             }
 
             quads.remap_data();

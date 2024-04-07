@@ -13,6 +13,9 @@ layout (location = 0) in vec2 o_uv;
 layout (location = 0) out vec4 uFragColor;
 
 void main() {
+    // modified color with full red
     vec4 color = texture(samplerColor, o_uv);
+    // float average = (color.r + color.g + color.b) / 3.0;
+    // color = vec4(average, average, average, color.a);
     uFragColor = color;
 }

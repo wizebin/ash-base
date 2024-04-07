@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -21,9 +21,9 @@ use ash::{
 };
 use winit::{
     event::{ElementState, Event, KeyEvent, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
+    event_loop::{ControlFlow, EventLoop, EventLoopBuilder},
     keyboard::{Key, NamedKey},
-    platform::run_on_demand::EventLoopExtRunOnDemand,
+    platform::{macos::EventLoopBuilderExtMacOS, run_on_demand::EventLoopExtRunOnDemand},
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     window::{Window, WindowBuilder},
 };
@@ -504,16 +504,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     unsafe {
         let app_name = "Ash Grid";
 
-        let event_loop = RefCell::new(EventLoop::new()?);
-        let window = Arc::new(Mutex::new(WindowBuilder::new()
-            .with_title(app_name)
-            .with_inner_size(winit::dpi::LogicalSize::new(
-                f64::from(800),
-                f64::from(800),
-            ))
-            .build(&event_loop.borrow())
-            .unwrap()));
-
+        let (event_loop, window) = make_winit_window(app_name);
 
         let base = ExampleBase::new(window.clone())?;
 

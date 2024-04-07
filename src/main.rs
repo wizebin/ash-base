@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_physical_device::get_physical_device_and_family_that_support, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -164,36 +164,9 @@ impl ExampleBase {
                 None,
             )
             .unwrap();
-            let pdevices = instance
-                .enumerate_physical_devices()
-                .expect("Physical device error");
+
             let surface_loader = surface::Instance::new(&entry, &instance);
-            let (pdevice, queue_family_index) = pdevices
-                .iter()
-                .find_map(|pdevice| {
-                    instance
-                        .get_physical_device_queue_family_properties(*pdevice)
-                        .iter()
-                        .enumerate()
-                        .find_map(|(index, info)| {
-                            let supports_graphic_and_surface =
-                                info.queue_flags.contains(vk::QueueFlags::GRAPHICS)
-                                    && surface_loader
-                                        .get_physical_device_surface_support(
-                                            *pdevice,
-                                            index as u32,
-                                            surface,
-                                        )
-                                        .unwrap();
-                            if supports_graphic_and_surface {
-                                Some((*pdevice, index))
-                            } else {
-                                None
-                            }
-                        })
-                })
-                .expect("Couldn't find suitable device.");
-            let queue_family_index = queue_family_index as u32;
+            let (pdevice, queue_family_index) = get_physical_device_and_family_that_support(&instance, &surface_loader, surface);
             let device_extension_names_raw = [
                 swapchain::NAME.as_ptr(),
                 #[cfg(any(target_os = "macos", target_os = "ios"))]

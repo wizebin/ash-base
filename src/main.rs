@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::make_logical_device, vulkan_physical_device::get_physical_device_and_family_that_support, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::make_logical_device, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -201,14 +201,6 @@ impl ExampleBase {
             } else {
                 surface_capabilities.current_transform
             };
-            let present_modes = surface_loader
-                .get_physical_device_surface_present_modes(pdevice, surface)
-                .unwrap();
-            let present_mode = present_modes
-                .iter()
-                .cloned()
-                .find(|&mode| mode == vk::PresentModeKHR::MAILBOX)
-                .unwrap_or(vk::PresentModeKHR::FIFO);
             let swapchain_loader = swapchain::Device::new(&instance, &locked_device);
 
             let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
@@ -221,7 +213,7 @@ impl ExampleBase {
                 .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .pre_transform(pre_transform)
                 .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-                .present_mode(present_mode)
+                .present_mode(get_mailbox_or_fifo_present_mode(&pdevice, &surface_loader, surface))
                 .clipped(true)
                 .image_array_layers(1);
 

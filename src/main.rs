@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::vulkan_debug_callback, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -69,6 +69,7 @@ pub struct ExampleBase {
     pub debug_utils_loader: debug_utils::Instance,
     pub window: Arc<Mutex<Window>>,
     pub debug_call_back: vk::DebugUtilsMessengerEXT,
+    pub depth_image: VulkanDepthImage,
 
     pub pdevice: vk::PhysicalDevice,
     pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
@@ -86,10 +87,6 @@ pub struct ExampleBase {
     pub pool: vk::CommandPool,
     pub draw_command_buffer: vk::CommandBuffer,
     pub setup_command_buffer: vk::CommandBuffer,
-
-    pub depth_image: vk::Image,
-    pub depth_image_view: vk::ImageView,
-    pub depth_image_memory: vk::DeviceMemory,
 
     pub present_complete_semaphores: Vec<vk::Semaphore>,
     pub rendering_complete_semaphores: Vec<vk::Semaphore>,
@@ -220,8 +217,10 @@ impl ExampleBase {
             let device: Device = instance
                 .create_device(pdevice, &device_create_info, None)
                 .unwrap();
+            let device = Arc::new(Mutex::new(device));
+            let locked_device = device.lock().unwrap();
 
-            let present_queue = device.get_device_queue(queue_family_index, 0);
+            let present_queue = locked_device.get_device_queue(queue_family_index, 0);
 
             let surface_format = surface_loader
                 .get_physical_device_surface_formats(pdevice, surface)
@@ -259,7 +258,7 @@ impl ExampleBase {
                 .cloned()
                 .find(|&mode| mode == vk::PresentModeKHR::MAILBOX)
                 .unwrap_or(vk::PresentModeKHR::FIFO);
-            let swapchain_loader = swapchain::Device::new(&instance, &device);
+            let swapchain_loader = swapchain::Device::new(&instance, &locked_device);
 
             let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
                 .surface(surface)
@@ -283,14 +282,14 @@ impl ExampleBase {
                 .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
                 .queue_family_index(queue_family_index);
 
-            let pool = device.create_command_pool(&pool_create_info, None).unwrap();
+            let pool = locked_device.create_command_pool(&pool_create_info, None).unwrap();
 
             let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
                 .command_buffer_count(2)
                 .command_pool(pool)
                 .level(vk::CommandBufferLevel::PRIMARY);
 
-            let command_buffers = device
+            let command_buffers = locked_device
                 .allocate_command_buffers(&command_buffer_allocate_info)
                 .unwrap();
             let setup_command_buffer = command_buffers[0];
@@ -317,54 +316,27 @@ impl ExampleBase {
                             layer_count: 1,
                         })
                         .image(image);
-                    device.create_image_view(&create_view_info, None).unwrap()
+                    locked_device.create_image_view(&create_view_info, None).unwrap()
                 })
                 .collect();
             let device_memory_properties = instance.get_physical_device_memory_properties(pdevice);
-            let depth_image_create_info = vk::ImageCreateInfo::default()
-                .image_type(vk::ImageType::TYPE_2D)
-                .format(vk::Format::D16_UNORM)
-                .extent(surface_resolution.into())
-                .mip_levels(1)
-                .array_layers(1)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-            let depth_image = device.create_image(&depth_image_create_info, None).unwrap();
-            let depth_image_memory_req = device.get_image_memory_requirements(depth_image);
-            let depth_image_memory_index = find_memorytype_index(
-                &depth_image_memory_req,
-                &device_memory_properties,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            )
-            .expect("Unable to find suitable memory index for depth image.");
-
-            let depth_image_allocate_info = vk::MemoryAllocateInfo::default()
-                .allocation_size(depth_image_memory_req.size)
-                .memory_type_index(depth_image_memory_index);
-
-            let depth_image_memory = device
-                .allocate_memory(&depth_image_allocate_info, None)
-                .unwrap();
-
-            device
-                .bind_image_memory(depth_image, depth_image_memory, 0)
-                .expect("Unable to bind depth image memory");
+            drop(locked_device); // temporary until we abstract everything else out, we need the device to be unlocked for the depth image creation
+            let depth_img = VulkanDepthImage::new(surface_resolution, device.clone(), device_memory_properties);
+            let locked_device = device.clone();
+            let locked_device = locked_device.lock().unwrap();
 
             let fence_create_info =
                 vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
 
-            let draw_commands_reuse_fence = device
+            let draw_commands_reuse_fence = locked_device
                 .create_fence(&fence_create_info, None)
                 .expect("Create fence failed.");
-            let setup_commands_reuse_fence = device
+            let setup_commands_reuse_fence = locked_device
                 .create_fence(&fence_create_info, None)
                 .expect("Create fence failed.");
 
             record_submit_commandbuffer(
-                &device,
+                &locked_device,
                 setup_command_buffer,
                 setup_commands_reuse_fence,
                 present_queue,
@@ -373,7 +345,7 @@ impl ExampleBase {
                 &[],
                 |device, setup_command_buffer| {
                     let layout_transition_barriers = vk::ImageMemoryBarrier::default()
-                        .image(depth_image)
+                        .image(depth_img.depth_image)
                         .dst_access_mask(
                             vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
                                 | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
@@ -399,39 +371,26 @@ impl ExampleBase {
                 },
             );
 
-            let depth_image_view_info = vk::ImageViewCreateInfo::default()
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::DEPTH)
-                        .level_count(1)
-                        .layer_count(1),
-                )
-                .image(depth_image)
-                .format(depth_image_create_info.format)
-                .view_type(vk::ImageViewType::TYPE_2D);
-
-            let depth_image_view = device
-                .create_image_view(&depth_image_view_info, None)
-                .unwrap();
-
             let semaphore_create_info = vk::SemaphoreCreateInfo::default();
 
             let present_complete_semaphores: Vec<vk::Semaphore> = (0..present_images.len())
-                .map(|_| device
+                .map(|_| locked_device
                     .create_semaphore(&semaphore_create_info, None)
                     .unwrap()
                 ).collect();
 
             let rendering_complete_semaphores = (0..present_images.len())
-                .map(|_| device
+                .map(|_| locked_device
                     .create_semaphore(&semaphore_create_info, None)
                     .unwrap()
                 ).collect();
 
+            drop(locked_device);
+
             Ok(Self {
                 entry,
                 instance,
-                device: Arc::new(Mutex::new(device)),
+                device,
                 queue_family_index,
                 pdevice,
                 device_memory_properties,
@@ -447,8 +406,6 @@ impl ExampleBase {
                 pool,
                 draw_command_buffer,
                 setup_command_buffer,
-                depth_image,
-                depth_image_view,
                 present_complete_semaphores,
                 rendering_complete_semaphores,
                 draw_commands_reuse_fence,
@@ -456,9 +413,9 @@ impl ExampleBase {
                 surface,
                 debug_call_back,
                 debug_utils_loader,
-                depth_image_memory,
                 current_swapchain_image: RefCell::new(0),
                 frame: RefCell::new(0),
+                depth_image: depth_img,
             })
         }
     }
@@ -482,9 +439,6 @@ impl Drop for ExampleBase {
                 .destroy_fence(self.draw_commands_reuse_fence, None);
             device
                 .destroy_fence(self.setup_commands_reuse_fence, None);
-            device.free_memory(self.depth_image_memory, None);
-            device.destroy_image_view(self.depth_image_view, None);
-            device.destroy_image(self.depth_image, None);
             for &image_view in self.present_image_views.iter() {
                 device.destroy_image_view(image_view, None);
             }
@@ -562,7 +516,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .present_image_views
             .iter()
             .map(|&present_image_view| {
-                let framebuffer_attachments = [present_image_view, base.depth_image_view];
+                let framebuffer_attachments = [present_image_view, base.depth_image.depth_image_view];
                 let frame_buffer_create_info = vk::FramebufferCreateInfo::default()
                     .render_pass(renderpass)
                     .attachments(&framebuffer_attachments)
@@ -578,8 +532,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let vertices = make_quad_vertices(0.0, 0.0, 0.5, 0.5, 0.0);
 
-        let mut quads = CoherentQuads::new(10, base.shared_device(), base.device_memory_properties);
-        for _ in 0..10 {
+        let quad_quantity = 3;
+        let mut quads = CoherentQuads::new(quad_quantity, base.shared_device(), base.device_memory_properties);
+        for _ in 0..quad_quantity {
             quads.add_quad(vertices.clone());
         }
         quads.remap_data();

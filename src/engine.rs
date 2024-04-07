@@ -11,3 +11,4 @@ pub mod vulkan_ubo;
 pub mod vertex_generation;
 pub mod vulkan_instance;
 pub mod winit_window;
+pub mod vulkan_depth_image;

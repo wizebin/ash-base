@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::{vulkan_debug_callback, VulkanDebugger}, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::make_logical_device, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_surface_capabilities::{get_standard_surface_image_count, get_surface_capabilities, get_surface_capabilities_pre_transform}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::{vulkan_debug_callback, VulkanDebugger}, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_commands::{create_command_buffers, VulkanCommandPool}, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::make_logical_device, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_surface_capabilities::{get_standard_surface_image_count, get_surface_capabilities, get_surface_capabilities_pre_transform}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -69,6 +69,7 @@ pub struct ExampleBase {
     pub window: Arc<Mutex<Window>>,
     pub depth_image: Option<VulkanDepthImage>,
     pub debugger: Option<VulkanDebugger>,
+    pub command_pool: Option<VulkanCommandPool>,
 
     pub pdevice: vk::PhysicalDevice,
     pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
@@ -83,7 +84,6 @@ pub struct ExampleBase {
     pub present_images: Vec<vk::Image>,
     pub present_image_views: Vec<vk::ImageView>,
 
-    pub pool: vk::CommandPool,
     pub draw_command_buffer: vk::CommandBuffer,
     pub setup_command_buffer: vk::CommandBuffer,
 
@@ -151,8 +151,8 @@ impl ExampleBase {
             let surface_loader = surface::Instance::new(&entry, &instance);
             let (pdevice, queue_family_index) = get_physical_device_and_family_that_support(&instance, &surface_loader, surface);
             let device = make_logical_device(&instance, pdevice, queue_family_index);
-            let locked_device = device.clone(); // temporary until we abstract everything else out, we need the device to be unlocked for the depth image creation
-            let locked_device = locked_device.lock().unwrap(); // temporary until we abstract everything else out, we need the device to be unlocked for the depth image creation
+            let locked_device = device.clone(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
+            let locked_device = locked_device.lock().unwrap(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
 
             let present_queue = locked_device.get_device_queue(queue_family_index, 0);
 
@@ -190,22 +190,11 @@ impl ExampleBase {
                 .create_swapchain(&swapchain_create_info, None)
                 .unwrap();
 
-            let pool_create_info = vk::CommandPoolCreateInfo::default()
-                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-                .queue_family_index(queue_family_index);
-
-            let pool = locked_device.create_command_pool(&pool_create_info, None).unwrap();
-
-            let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
-                .command_buffer_count(2)
-                .command_pool(pool)
-                .level(vk::CommandBufferLevel::PRIMARY);
-
-            let command_buffers = locked_device
-                .allocate_command_buffers(&command_buffer_allocate_info)
-                .unwrap();
-            let setup_command_buffer = command_buffers[0];
-            let draw_command_buffer = command_buffers[1];
+            drop(locked_device); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
+            let command_pool = VulkanCommandPool::new(device.clone(), queue_family_index);
+            let (setup_command_buffer, draw_command_buffer) = create_command_buffers(&command_pool, device.clone());
+            let locked_device = device.clone(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
+            let locked_device = locked_device.lock().unwrap(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
 
             let present_images = swapchain_loader.get_swapchain_images(swapchain).unwrap();
             let present_image_views: Vec<vk::ImageView> = present_images
@@ -232,10 +221,10 @@ impl ExampleBase {
                 })
                 .collect();
             let device_memory_properties = instance.get_physical_device_memory_properties(pdevice);
-            drop(locked_device); // temporary until we abstract everything else out, we need the device to be unlocked for the depth image creation
+            drop(locked_device); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
             let depth_img = VulkanDepthImage::new(surface_resolution, device.clone(), device_memory_properties);
-            let locked_device = device.clone(); // temporary until we abstract everything else out, we need the device to be unlocked for the depth image creation
-            let locked_device = locked_device.lock().unwrap(); // temporary until we abstract everything else out, we need the device to be unlocked for the depth image creation
+            let locked_device = device.clone(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
+            let locked_device = locked_device.lock().unwrap(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
 
             let fence_create_info =
                 vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
@@ -315,7 +304,6 @@ impl ExampleBase {
                 swapchain,
                 present_images,
                 present_image_views,
-                pool,
                 draw_command_buffer,
                 setup_command_buffer,
                 present_complete_semaphores,
@@ -327,6 +315,7 @@ impl ExampleBase {
                 frame: RefCell::new(0),
                 depth_image: Some(depth_img),
                 debugger: Some(debugger),
+                command_pool: Some(command_pool),
             })
         }
     }
@@ -336,32 +325,37 @@ impl Drop for ExampleBase {
     fn drop(&mut self) {
         self.depth_image = None;
 
-        let device = self.device.lock().unwrap();
         unsafe {
-            device.device_wait_idle().unwrap();
+            {
+                let device = self.device.lock().unwrap();
+                device.device_wait_idle().unwrap();
 
-            for semaphore in self.present_complete_semaphores.iter() {
-                device.destroy_semaphore(*semaphore, None);
-            }
+                for semaphore in self.present_complete_semaphores.iter() {
+                    device.destroy_semaphore(*semaphore, None);
+                }
 
-            for semaphore in self.rendering_complete_semaphores.iter() {
-                device.destroy_semaphore(*semaphore, None);
-            }
+                for semaphore in self.rendering_complete_semaphores.iter() {
+                    device.destroy_semaphore(*semaphore, None);
+                }
 
-            device
-                .destroy_fence(self.draw_commands_reuse_fence, None);
-            device
-                .destroy_fence(self.setup_commands_reuse_fence, None);
-            for &image_view in self.present_image_views.iter() {
-                device.destroy_image_view(image_view, None);
+                device
+                    .destroy_fence(self.draw_commands_reuse_fence, None);
+                device
+                    .destroy_fence(self.setup_commands_reuse_fence, None);
+                for &image_view in self.present_image_views.iter() {
+                    device.destroy_image_view(image_view, None);
+                }
             }
-            device.destroy_command_pool(self.pool, None);
-            self.swapchain_loader
-                .destroy_swapchain(self.swapchain, None);
-            device.destroy_device(None);
-            self.surface_loader.destroy_surface(self.surface, None);
-            self.debugger = None;
-            self.instance.destroy_instance(None);
+            self.command_pool = None;
+            {
+                let device = self.device.lock().unwrap();
+                self.swapchain_loader
+                    .destroy_swapchain(self.swapchain, None);
+                device.destroy_device(None);
+                self.surface_loader.destroy_surface(self.surface, None);
+                self.debugger = None;
+                self.instance.destroy_instance(None);
+            }
         }
     }
 }
@@ -680,7 +674,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .create_pipeline_layout(&layout_create_info, None)
             .unwrap();
 
-        let shader_entry_name = ffi::CStr::from_bytes_with_nul_unchecked(b"main\0");
+        let shader_entry_name = ffi::CString::new("main").unwrap();
+        let shader_entry_name = shader_entry_name.as_c_str();
         let shader_stage_create_infos = [
             vk::PipelineShaderStageCreateInfo {
                 module: vertex_shader_module,

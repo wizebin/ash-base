@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::{vulkan_debug_callback, VulkanDebugger}, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_commands::{create_command_buffers, VulkanCommandPool}, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::make_logical_device, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_surface_capabilities::{get_standard_surface_image_count, get_surface_capabilities, get_surface_capabilities_pre_transform}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::{vulkan_debug_callback, VulkanDebugger}, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_commands::{create_command_buffers, VulkanCommandPool}, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::make_logical_device, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_surface::{get_standard_surface_image_count, get_surface_capabilities, get_surface_capabilities_pre_transform, VulkanSurface}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -64,19 +64,18 @@ pub struct ExampleBase {
     pub entry: Entry,
     pub instance: Instance,
     pub device: Arc<Mutex<Device>>,
-    pub surface_loader: surface::Instance,
     pub swapchain_loader: swapchain::Device,
     pub window: Arc<Mutex<Window>>,
     pub depth_image: Option<VulkanDepthImage>,
     pub debugger: Option<VulkanDebugger>,
     pub command_pool: Option<VulkanCommandPool>,
+    pub surface: Option<VulkanSurface>,
 
     pub pdevice: vk::PhysicalDevice,
     pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub queue_family_index: u32,
     pub present_queue: vk::Queue,
 
-    pub surface: vk::SurfaceKHR,
     pub surface_format: vk::SurfaceFormatKHR,
     pub surface_resolution: vk::Extent2D,
 
@@ -135,32 +134,24 @@ impl ExampleBase {
                 }
             };
 
+            let debugger = VulkanDebugger::new(&entry, &instance);
+            let surf = VulkanSurface::new(&entry, &instance, window.clone());
+
             let locked_window = window.clone();
             let locked_window = locked_window.lock().unwrap();
 
-            let debugger = VulkanDebugger::new(&entry, &instance);
-
-            let surface = ash_window::create_surface(
-                &entry,
-                &instance,
-                locked_window.display_handle()?.as_raw(),
-                locked_window.window_handle()?.as_raw(),
-                None,
-            )
-            .unwrap();
-            let surface_loader = surface::Instance::new(&entry, &instance);
-            let (pdevice, queue_family_index) = get_physical_device_and_family_that_support(&instance, &surface_loader, surface);
+            let (pdevice, queue_family_index) = get_physical_device_and_family_that_support(&instance, &surf.surface_loader, surf.surface);
             let device = make_logical_device(&instance, pdevice, queue_family_index);
             let locked_device = device.clone(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
             let locked_device = locked_device.lock().unwrap(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
 
             let present_queue = locked_device.get_device_queue(queue_family_index, 0);
 
-            let surface_format = surface_loader
-                .get_physical_device_surface_formats(pdevice, surface)
+            let surface_format = surf.surface_loader
+                .get_physical_device_surface_formats(pdevice, surf.surface)
                 .unwrap()[0];
 
-            let surface_capabilities = get_surface_capabilities(&pdevice, &surface_loader, surface);
+            let surface_capabilities = get_surface_capabilities(&pdevice, &surf.surface_loader, surf.surface);
             let desired_image_count = get_standard_surface_image_count(&surface_capabilities);
             let surface_resolution = match surface_capabilities.current_extent.width {
                 u32::MAX => vk::Extent2D {
@@ -173,7 +164,7 @@ impl ExampleBase {
             let swapchain_loader = swapchain::Device::new(&instance, &locked_device);
 
             let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
-                .surface(surface)
+                .surface(surf.surface)
                 .min_image_count(desired_image_count)
                 .image_color_space(surface_format.color_space)
                 .image_format(surface_format.format)
@@ -182,7 +173,7 @@ impl ExampleBase {
                 .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .pre_transform(pre_transform)
                 .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-                .present_mode(get_mailbox_or_fifo_present_mode(&pdevice, &surface_loader, surface))
+                .present_mode(get_mailbox_or_fifo_present_mode(&pdevice, &surf.surface_loader, surf.surface))
                 .clipped(true)
                 .image_array_layers(1);
 
@@ -296,7 +287,6 @@ impl ExampleBase {
                 pdevice,
                 device_memory_properties,
                 window,
-                surface_loader,
                 surface_format,
                 present_queue,
                 surface_resolution,
@@ -310,12 +300,12 @@ impl ExampleBase {
                 rendering_complete_semaphores,
                 draw_commands_reuse_fence,
                 setup_commands_reuse_fence,
-                surface,
                 current_swapchain_image: RefCell::new(0),
                 frame: RefCell::new(0),
                 depth_image: Some(depth_img),
                 debugger: Some(debugger),
                 command_pool: Some(command_pool),
+                surface: Some(surf),
             })
         }
     }
@@ -347,12 +337,12 @@ impl Drop for ExampleBase {
                 }
             }
             self.command_pool = None;
+            self.surface = None;
             {
                 let device = self.device.lock().unwrap();
                 self.swapchain_loader
                     .destroy_swapchain(self.swapchain, None);
                 device.destroy_device(None);
-                self.surface_loader.destroy_surface(self.surface, None);
                 self.debugger = None;
                 self.instance.destroy_instance(None);
             }

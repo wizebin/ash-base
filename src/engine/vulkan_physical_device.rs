@@ -37,10 +37,10 @@ pub unsafe fn get_physical_device_and_family_that_support(instance: &Instance, s
     (pdevice, queue_family_index as u32)
 }
 
-pub unsafe fn get_mailbox_or_fifo_present_mode(physical_device: &vk::PhysicalDevice, surface_loader: &surface::Instance, surface: SurfaceKHR) -> vk::PresentModeKHR {
-    let present_modes = surface_loader
+pub fn get_mailbox_or_fifo_present_mode(physical_device: &vk::PhysicalDevice, surface_loader: &surface::Instance, surface: SurfaceKHR) -> vk::PresentModeKHR {
+    let present_modes = unsafe { surface_loader
         .get_physical_device_surface_present_modes(*physical_device, surface)
-        .unwrap();
+        .unwrap() };
 
     present_modes
         .iter()

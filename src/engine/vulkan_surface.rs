@@ -64,6 +64,30 @@ impl VulkanSurface {
             surface,
         }
     }
+
+    pub fn get_format(&self, physical_device: &vk::PhysicalDevice) -> vk::SurfaceFormatKHR {
+        unsafe {
+            self.surface_loader
+                .get_physical_device_surface_formats(*physical_device, self.surface)
+                .unwrap()[0]
+        }
+    }
+
+    pub fn get_resolution(&self, desired_resolution: vk::Extent2D, physical_device: &vk::PhysicalDevice) -> vk::Extent2D {
+        unsafe {
+            let surface_capabilities = get_surface_capabilities(physical_device, &self.surface_loader, self.surface);
+
+            let surface_resolution = match surface_capabilities.current_extent.width {
+                u32::MAX => desired_resolution,
+                _ => surface_capabilities.current_extent,
+            };
+
+            self.surface_loader
+                .get_physical_device_surface_capabilities(*physical_device, self.surface)
+                .unwrap()
+                .current_extent
+        }
+    }
 }
 
 impl Drop for VulkanSurface {

@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell, default::Default, sync::{Arc, Mutex},
 };
+use ash::vk;
 use winit::{
     event_loop::{EventLoop, EventLoopBuilder},
     platform::{macos::EventLoopBuilderExtMacOS},
@@ -34,4 +35,11 @@ pub fn make_winit_window(app_name: &str) -> (RefCell<EventLoop<()>>, Arc<Mutex<W
     let window = Arc::new(Mutex::new(window));
 
     (event_loop, window)
+}
+
+pub fn get_window_resolution(window: Arc<Mutex<Window>>) -> vk::Extent2D {
+    let locked_window = window.clone();
+    let locked_window = locked_window.lock().unwrap();
+
+    vk::Extent2D::default().width(locked_window.inner_size().width).height(locked_window.inner_size().height)
 }

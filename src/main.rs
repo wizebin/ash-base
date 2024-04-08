@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::{vulkan_debug_callback, VulkanDebugger}, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_commands::{create_command_buffers, VulkanCommandPool}, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::make_logical_device, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_surface::{get_standard_surface_image_count, get_surface_capabilities, get_surface_capabilities_pre_transform, VulkanSurface}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::make_winit_window};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::{vulkan_debug_callback, VulkanDebugger}, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_commands::{create_command_buffers, get_device_presentation_queue, VulkanCommandPool}, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::{make_logical_device, make_swapchain_device}, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_surface::{get_standard_surface_image_count, get_surface_capabilities, get_surface_capabilities_pre_transform, VulkanSurface}, vulkan_swapchain::{create_standard_swapchain, get_swapchain_image_views}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::{get_window_resolution, make_winit_window}};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -64,7 +64,7 @@ pub struct ExampleBase {
     pub entry: Entry,
     pub instance: Instance,
     pub device: Arc<Mutex<Device>>,
-    pub swapchain_loader: swapchain::Device,
+    pub swapchain_device: swapchain::Device,
     pub window: Arc<Mutex<Window>>,
     pub depth_image: Option<VulkanDepthImage>,
     pub debugger: Option<VulkanDebugger>,
@@ -138,82 +138,18 @@ impl ExampleBase {
             let surf = VulkanSurface::new(&entry, &instance, window.clone());
             let (pdevice, queue_family_index) = get_physical_device_and_family_that_support(&instance, &surf.surface_loader, surf.surface);
             let device = make_logical_device(&instance, pdevice, queue_family_index);
+            let present_queue = get_device_presentation_queue(device.clone(), queue_family_index);
+            let surface_format = surf.get_format(&pdevice);
+            let surface_resolution = surf.get_resolution(get_window_resolution(window.clone()), &pdevice);
+            let swapchain_device = make_swapchain_device(&instance, device.clone());
+            let swapchain = create_standard_swapchain(&pdevice, &surf, surface_format, surface_resolution, &swapchain_device);
 
-            let locked_window = window.clone();
-            let locked_window = locked_window.lock().unwrap();
-
-            let locked_device = device.clone(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
-            let locked_device = locked_device.lock().unwrap(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
-
-            let present_queue = locked_device.get_device_queue(queue_family_index, 0);
-
-            let surface_format = surf.surface_loader
-                .get_physical_device_surface_formats(pdevice, surf.surface)
-                .unwrap()[0];
-
-            let surface_capabilities = get_surface_capabilities(&pdevice, &surf.surface_loader, surf.surface);
-            let desired_image_count = get_standard_surface_image_count(&surface_capabilities);
-            let surface_resolution = match surface_capabilities.current_extent.width {
-                u32::MAX => vk::Extent2D {
-                    width: locked_window.inner_size().width,
-                    height: locked_window.inner_size().height,
-                },
-                _ => surface_capabilities.current_extent,
-            };
-            let pre_transform = get_surface_capabilities_pre_transform(&surface_capabilities);
-            let swapchain_loader = swapchain::Device::new(&instance, &locked_device);
-
-            let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
-                .surface(surf.surface)
-                .min_image_count(desired_image_count)
-                .image_color_space(surface_format.color_space)
-                .image_format(surface_format.format)
-                .image_extent(surface_resolution)
-                .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
-                .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .pre_transform(pre_transform)
-                .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-                .present_mode(get_mailbox_or_fifo_present_mode(&pdevice, &surf.surface_loader, surf.surface))
-                .clipped(true)
-                .image_array_layers(1);
-
-            let swapchain = swapchain_loader
-                .create_swapchain(&swapchain_create_info, None)
-                .unwrap();
-
-            drop(locked_device); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
             let command_pool = VulkanCommandPool::new(device.clone(), queue_family_index);
             let (setup_command_buffer, draw_command_buffer) = create_command_buffers(&command_pool, device.clone());
-            let locked_device = device.clone(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
-            let locked_device = locked_device.lock().unwrap(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
-
-            let present_images = swapchain_loader.get_swapchain_images(swapchain).unwrap();
-            let present_image_views: Vec<vk::ImageView> = present_images
-                .iter()
-                .map(|&image| {
-                    let create_view_info = vk::ImageViewCreateInfo::default()
-                        .view_type(vk::ImageViewType::TYPE_2D)
-                        .format(surface_format.format)
-                        .components(vk::ComponentMapping {
-                            r: vk::ComponentSwizzle::R,
-                            g: vk::ComponentSwizzle::G,
-                            b: vk::ComponentSwizzle::B,
-                            a: vk::ComponentSwizzle::A,
-                        })
-                        .subresource_range(vk::ImageSubresourceRange {
-                            aspect_mask: vk::ImageAspectFlags::COLOR,
-                            base_mip_level: 0,
-                            level_count: 1,
-                            base_array_layer: 0,
-                            layer_count: 1,
-                        })
-                        .image(image);
-                    locked_device.create_image_view(&create_view_info, None).unwrap()
-                })
-                .collect();
+            let (present_images, present_image_views) = get_swapchain_image_views(device.clone(), &swapchain_device, swapchain, surface_format);
             let device_memory_properties = instance.get_physical_device_memory_properties(pdevice);
-            drop(locked_device); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
             let depth_img = VulkanDepthImage::new(surface_resolution, device.clone(), device_memory_properties);
+
             let locked_device = device.clone(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
             let locked_device = locked_device.lock().unwrap(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
 
@@ -290,7 +226,7 @@ impl ExampleBase {
                 surface_format,
                 present_queue,
                 surface_resolution,
-                swapchain_loader,
+                swapchain_device,
                 swapchain,
                 present_images,
                 present_image_views,
@@ -335,7 +271,7 @@ impl Drop for ExampleBase {
                 for &image_view in self.present_image_views.iter() {
                     device.destroy_image_view(image_view, None);
                 }
-                self.swapchain_loader
+                self.swapchain_device
                     .destroy_swapchain(self.swapchain, None);
             }
             self.command_pool = None;
@@ -789,7 +725,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             quads.remap_data();
 
             let (present_index, _) = base
-                .swapchain_loader
+                .swapchain_device
                 .acquire_next_image(
                     base.swapchain,
                     u64::MAX,
@@ -879,7 +815,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 p_image_indices: &present_index,
                 ..Default::default()
             };
-            base.swapchain_loader
+            base.swapchain_device
                 .queue_present(base.present_queue, &present_info)
                 .unwrap();
         });

@@ -55,3 +55,10 @@ pub fn create_command_buffers(command_pool: &VulkanCommandPool, device: Arc<Mute
 
     (setup_command_buffer, draw_command_buffer)
 }
+
+pub fn get_device_presentation_queue(device: Arc<Mutex<Device>>, queue_family_index: u32) -> vk::Queue {
+    let locked_device = device.clone();
+    let locked_device = locked_device.lock().unwrap();
+
+    unsafe { locked_device.get_device_queue(queue_family_index, 0) }
+}

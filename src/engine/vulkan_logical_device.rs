@@ -33,3 +33,10 @@ pub unsafe fn make_logical_device(instance: &Instance, pdevice: vk::PhysicalDevi
 
     Arc::new(Mutex::new(device))
 }
+
+pub fn make_swapchain_device(instance: &Instance, logical_device: Arc<Mutex<Device>>) -> swapchain::Device {
+    let locked_device = logical_device.clone();
+    let locked_device = locked_device.lock().unwrap();
+
+    swapchain::Device::new(instance, &locked_device)
+}

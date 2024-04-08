@@ -16,3 +16,4 @@ pub mod vulkan_physical_device;
 pub mod vulkan_logical_device;
 pub mod vulkan_surface;
 pub mod vulkan_commands;
+pub mod vulkan_swapchain;

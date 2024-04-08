@@ -136,12 +136,12 @@ impl ExampleBase {
 
             let debugger = VulkanDebugger::new(&entry, &instance);
             let surf = VulkanSurface::new(&entry, &instance, window.clone());
+            let (pdevice, queue_family_index) = get_physical_device_and_family_that_support(&instance, &surf.surface_loader, surf.surface);
+            let device = make_logical_device(&instance, pdevice, queue_family_index);
 
             let locked_window = window.clone();
             let locked_window = locked_window.lock().unwrap();
 
-            let (pdevice, queue_family_index) = get_physical_device_and_family_that_support(&instance, &surf.surface_loader, surf.surface);
-            let device = make_logical_device(&instance, pdevice, queue_family_index);
             let locked_device = device.clone(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
             let locked_device = locked_device.lock().unwrap(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
 
@@ -335,13 +335,13 @@ impl Drop for ExampleBase {
                 for &image_view in self.present_image_views.iter() {
                     device.destroy_image_view(image_view, None);
                 }
+                self.swapchain_loader
+                    .destroy_swapchain(self.swapchain, None);
             }
             self.command_pool = None;
             self.surface = None;
             {
                 let device = self.device.lock().unwrap();
-                self.swapchain_loader
-                    .destroy_swapchain(self.swapchain, None);
                 device.destroy_device(None);
                 self.debugger = None;
                 self.instance.destroy_instance(None);

@@ -6,8 +6,10 @@
     unused_qualifications
 )]
 
-use std::default::Default;
+use std::{default::Default, sync::{Arc, Mutex}};
 use ash::{vk, Device};
+
+use super::vulkan_depth_image::VulkanDepthImage;
 
 /// Helper function for submitting command buffers. Immediately waits for the fence before the command buffer
 /// is executed. That way we can delay the waiting for the fences by 1 frame which is good for performance.
@@ -62,4 +64,45 @@ pub fn record_submit_commandbuffer<FunctionPointerType: FnOnce(&Device, vk::Comm
             .queue_submit(submit_queue, &[submit_info], command_buffer_reuse_fence)
             .expect("queue submit failed.");
     }
+}
+
+pub fn submit_commandbuffer_to_ensure_depth_image_format(device: Arc<Mutex<ash::Device>>, setup_command_buffer: vk::CommandBuffer, setup_commands_reuse_fence: vk::Fence, setup_command_buffer_submit_queue: vk::Queue, depth_image: &VulkanDepthImage) {
+    let locked_device = device.clone();
+    let locked_device = locked_device.lock().unwrap();
+
+    record_submit_commandbuffer(
+        &locked_device,
+        setup_command_buffer,
+        setup_commands_reuse_fence,
+        setup_command_buffer_submit_queue,
+        &[],
+        &[],
+        &[],
+        |device, setup_command_buffer| {
+            let layout_transition_barriers = vk::ImageMemoryBarrier::default()
+                .image(depth_image.depth_image)
+                .dst_access_mask(
+                    vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+                        | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                )
+                .new_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::DEPTH)
+                        .layer_count(1)
+                        .level_count(1),
+                );
+
+            unsafe { device.cmd_pipeline_barrier(
+                setup_command_buffer,
+                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[layout_transition_barriers],
+            ) };
+        },
+    );
 }

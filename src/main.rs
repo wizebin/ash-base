@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::record_submit_commandbuffer, debugging::{vulkan_debug_callback, VulkanDebugger}, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_commands::{create_command_buffers, get_device_presentation_queue, VulkanCommandPool}, vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::{make_logical_device, make_swapchain_device}, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_surface::{get_standard_surface_image_count, get_surface_capabilities, get_surface_capabilities_pre_transform, VulkanSurface}, vulkan_swapchain::{create_standard_swapchain, get_swapchain_image_views}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::{get_window_resolution, make_winit_window}};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::{record_submit_commandbuffer, submit_commandbuffer_to_ensure_depth_image_format}, debugging::{vulkan_debug_callback, VulkanDebugger}, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_commands::{create_command_buffers, get_device_presentation_queue, VulkanCommandPool}, vulkan_depth_image::VulkanDepthImage, vulkan_fences::create_standard_fences, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::{make_logical_device, make_swapchain_device}, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_semaphores::create_semaphores, vulkan_surface::{get_standard_surface_image_count, get_surface_capabilities, get_surface_capabilities_pre_transform, VulkanSurface}, vulkan_swapchain::{create_standard_swapchain, get_swapchain_image_views}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::{get_window_resolution, make_winit_window}};
 
 use std::{
     borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -124,15 +124,7 @@ impl ExampleBase {
                 locked_window.title()
             };
 
-            // temporary until we move instance creation out of example base, at which point we should set the name separate from the window title
-            let instance = make_vulkan_instance(title.as_str(), &entry, window.clone());
-            let instance = match instance {
-                Ok(instance) => instance,
-                Err(err) => {
-                    eprintln!("Failed to create instance: {}", err);
-                    return Err(err);
-                }
-            };
+            let instance = make_vulkan_instance(title.as_str(), &entry, window.clone())?;
 
             let debugger = VulkanDebugger::new(&entry, &instance);
             let surf = VulkanSurface::new(&entry, &instance, window.clone());
@@ -150,70 +142,20 @@ impl ExampleBase {
             let device_memory_properties = instance.get_physical_device_memory_properties(pdevice);
             let depth_img = VulkanDepthImage::new(surface_resolution, device.clone(), device_memory_properties);
 
-            let locked_device = device.clone(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
-            let locked_device = locked_device.lock().unwrap(); // TEMPORARY, DELETE AFTER FULL ABSTRACTION
+            let fences = create_standard_fences(device.clone(), 2);
+            let (draw_commands_reuse_fence, setup_commands_reuse_fence) = (fences[0], fences[1]);
 
-            let fence_create_info =
-                vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
 
-            let draw_commands_reuse_fence = locked_device
-                .create_fence(&fence_create_info, None)
-                .expect("Create fence failed.");
-            let setup_commands_reuse_fence = locked_device
-                .create_fence(&fence_create_info, None)
-                .expect("Create fence failed.");
-
-            record_submit_commandbuffer(
-                &locked_device,
+            submit_commandbuffer_to_ensure_depth_image_format(
+                device.clone(),
                 setup_command_buffer,
                 setup_commands_reuse_fence,
                 present_queue,
-                &[],
-                &[],
-                &[],
-                |device, setup_command_buffer| {
-                    let layout_transition_barriers = vk::ImageMemoryBarrier::default()
-                        .image(depth_img.depth_image)
-                        .dst_access_mask(
-                            vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
-                                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                        )
-                        .new_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                        .old_layout(vk::ImageLayout::UNDEFINED)
-                        .subresource_range(
-                            vk::ImageSubresourceRange::default()
-                                .aspect_mask(vk::ImageAspectFlags::DEPTH)
-                                .layer_count(1)
-                                .level_count(1),
-                        );
-
-                    device.cmd_pipeline_barrier(
-                        setup_command_buffer,
-                        vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                        vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        &[],
-                        &[layout_transition_barriers],
-                    );
-                },
+                &depth_img,
             );
 
-            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-
-            let present_complete_semaphores: Vec<vk::Semaphore> = (0..present_images.len())
-                .map(|_| locked_device
-                    .create_semaphore(&semaphore_create_info, None)
-                    .unwrap()
-                ).collect();
-
-            let rendering_complete_semaphores = (0..present_images.len())
-                .map(|_| locked_device
-                    .create_semaphore(&semaphore_create_info, None)
-                    .unwrap()
-                ).collect();
-
-            drop(locked_device);
+            let present_complete_semaphores = create_semaphores(device.clone(), present_images.len());
+            let rendering_complete_semaphores = create_semaphores(device.clone(), present_images.len());
 
             Ok(Self {
                 entry,

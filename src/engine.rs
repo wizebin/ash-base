@@ -19,3 +19,6 @@ pub mod vulkan_commands;
 pub mod vulkan_swapchain;
 pub mod vulkan_fences;
 pub mod vulkan_semaphores;
+pub mod vulkan_attachments;
+pub mod vulkan_render_pass;
+pub mod vulkan_framebuffer;

@@ -13,7 +13,7 @@ pub struct VulkanDepthImage {
 }
 
 impl VulkanDepthImage {
-    pub unsafe fn new(surface_resolution: Extent2D, device: Arc<Mutex<Device>>, device_memory_properties: vk::PhysicalDeviceMemoryProperties) -> Self {
+    pub fn new(surface_resolution: Extent2D, device: Arc<Mutex<Device>>, device_memory_properties: vk::PhysicalDeviceMemoryProperties) -> Self {
         let locked_device = device.clone();
         let locked_device = locked_device.lock().unwrap();
 
@@ -28,8 +28,8 @@ impl VulkanDepthImage {
             .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-        let depth_image = locked_device.create_image(&depth_image_create_info, None).unwrap();
-        let depth_image_memory_req = locked_device.get_image_memory_requirements(depth_image);
+        let depth_image = unsafe { locked_device.create_image(&depth_image_create_info, None).unwrap() };
+        let depth_image_memory_req = unsafe { locked_device.get_image_memory_requirements(depth_image) };
         let depth_image_memory_index = find_memorytype_index(
             &depth_image_memory_req,
             &device_memory_properties,
@@ -41,13 +41,13 @@ impl VulkanDepthImage {
             .allocation_size(depth_image_memory_req.size)
             .memory_type_index(depth_image_memory_index);
 
-        let depth_image_memory = locked_device
+        let depth_image_memory = unsafe { locked_device
             .allocate_memory(&depth_image_allocate_info, None)
-            .unwrap();
+            .unwrap() };
 
-        locked_device
+        unsafe { locked_device
             .bind_image_memory(depth_image, depth_image_memory, 0)
-            .expect("Unable to bind depth image memory");
+            .expect("Unable to bind depth image memory") };
 
         let depth_image_view_info = vk::ImageViewCreateInfo::default()
             .subresource_range(
@@ -60,9 +60,9 @@ impl VulkanDepthImage {
             .format(depth_image_create_info.format)
             .view_type(vk::ImageViewType::TYPE_2D);
 
-        let depth_image_view = locked_device
+        let depth_image_view = unsafe { locked_device
             .create_image_view(&depth_image_view_info, None)
-            .unwrap();
+            .unwrap() };
 
         Self {
             device,

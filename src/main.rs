@@ -8,10 +8,10 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::{record_submit_commandbuffer, submit_commandbuffer_to_ensure_depth_image_format}, debugging::{vulkan_debug_callback, VulkanDebugger}, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_commands::{create_command_buffers, get_device_presentation_queue, VulkanCommandPool}, vulkan_depth_image::VulkanDepthImage, vulkan_fences::create_standard_fences, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::{make_logical_device, make_swapchain_device}, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_semaphores::create_semaphores, vulkan_surface::{get_standard_surface_image_count, get_surface_capabilities, get_surface_capabilities_pre_transform, VulkanSurface}, vulkan_swapchain::{create_standard_swapchain, get_swapchain_image_views}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::{get_window_resolution, make_winit_window}};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::{record_submit_commandbuffer, submit_commandbuffer_to_ensure_depth_image_format}, debugging::{vulkan_debug_callback, VulkanDebugger}, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_attachments::{make_color_attachment, make_color_subpass_dependency, make_depth_attachment, make_standard_depth_color_attachments}, vulkan_commands::{create_command_buffers, get_device_presentation_queue, VulkanCommandPool}, vulkan_depth_image::VulkanDepthImage, vulkan_fences::create_standard_fences, vulkan_framebuffer::VulkanFramebuffers, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::{make_logical_device, make_swapchain_device}, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_render_pass::VulkanColorDepthRenderPass, vulkan_semaphores::create_semaphores, vulkan_surface::{get_standard_surface_image_count, get_surface_capabilities, get_surface_capabilities_pre_transform, VulkanSurface}, vulkan_swapchain::{create_standard_swapchain, get_swapchain_image_views}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::{get_window_resolution, make_winit_window}};
 
 use std::{
-    borrow::Cow, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
+    borrow::{Borrow, Cow}, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
 };
 
 use ash::{
@@ -76,6 +76,8 @@ pub struct ExampleBase {
     pub debugger: Option<VulkanDebugger>,
     pub command_pool: Option<VulkanCommandPool>,
     pub surface: Option<VulkanSurface>,
+    pub renderpass: Option<VulkanColorDepthRenderPass>,
+    pub framebuffers: Option<VulkanFramebuffers>,
 
     pub pdevice: vk::PhysicalDevice,
     pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
@@ -163,6 +165,19 @@ impl ExampleBase {
             let present_complete_semaphores = create_semaphores(device.clone(), present_images.len());
             let rendering_complete_semaphores = create_semaphores(device.clone(), present_images.len());
 
+            // refactoring
+            let renderpass = VulkanColorDepthRenderPass::new(device.clone(), surface_format.format);
+
+            let framebuffers = VulkanFramebuffers::new(
+                device.clone(),
+                surface_resolution,
+                &renderpass,
+                &depth_img,
+                &present_image_views,
+            );
+
+            // end refactoring
+
             Ok(Self {
                 entry,
                 instance,
@@ -190,14 +205,62 @@ impl ExampleBase {
                 debugger: Some(debugger),
                 command_pool: Some(command_pool),
                 surface: Some(surf),
+                renderpass: Some(renderpass),
+                framebuffers: Some(framebuffers),
             })
         }
+    }
+
+    pub fn recreate_swapchain(&mut self, resolution: vk::Extent2D) {
+        unsafe {
+            self.renderpass = None;
+            self.framebuffers = None;
+            self.depth_image = None;
+            let device = self.device.lock().unwrap();
+            device.device_wait_idle().unwrap();
+            for &image_view in self.present_image_views.iter() {
+                device.destroy_image_view(image_view, None);
+            }
+            self.swapchain_device
+                    .destroy_swapchain(self.swapchain, None);
+        }
+
+        self.surface_resolution = resolution;
+
+        let swapchain = create_standard_swapchain(&self.pdevice, &self.surface.as_ref().unwrap(), self.surface_format, self.surface_resolution, &self.swapchain_device);
+        let (present_images, present_image_views) = get_swapchain_image_views(self.device.clone(), &self.swapchain_device, swapchain, self.surface_format);
+
+        self.swapchain = swapchain;
+        self.present_images = present_images;
+        self.present_image_views = present_image_views;
+
+        self.renderpass = Some(VulkanColorDepthRenderPass::new(self.device.clone(), self.surface_format.format));
+        self.depth_image = Some(VulkanDepthImage::new(self.surface_resolution, self.device.clone(), self.device_memory_properties));
+
+        submit_commandbuffer_to_ensure_depth_image_format(
+                self.device.clone(),
+                self.setup_command_buffer,
+                self.setup_commands_reuse_fence,
+                self.present_queue,
+                &self.depth_image.as_ref().unwrap(),
+            );
+
+        println!("Recreating framebuffers with size {:?}", self.surface_resolution);
+        self.framebuffers = Some(VulkanFramebuffers::new(
+            self.device.clone(),
+            self.surface_resolution,
+            &self.renderpass.as_ref().unwrap(),
+            &self.depth_image.as_ref().unwrap(),
+            &self.present_image_views,
+        ));
     }
 }
 
 impl Drop for ExampleBase {
     fn drop(&mut self) {
         self.depth_image = None;
+        self.framebuffers = None;
+        self.renderpass = None;
 
         unsafe {
             {
@@ -241,74 +304,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         let (event_loop, window) = make_winit_window(app_name);
 
         let mut base = ExampleBase::new(window.clone())?;
-
-        let renderpass_attachments = [
-            vk::AttachmentDescription {
-                format: base.surface_format.format,
-                samples: vk::SampleCountFlags::TYPE_1,
-                load_op: vk::AttachmentLoadOp::CLEAR,
-                store_op: vk::AttachmentStoreOp::STORE,
-                final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-                ..Default::default()
-            },
-            vk::AttachmentDescription {
-                format: vk::Format::D16_UNORM,
-                samples: vk::SampleCountFlags::TYPE_1,
-                load_op: vk::AttachmentLoadOp::CLEAR,
-                initial_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                final_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                ..Default::default()
-            },
-        ];
-        let color_attachment_refs = [vk::AttachmentReference {
-            attachment: 0,
-            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-        }];
-        let depth_attachment_ref = vk::AttachmentReference {
-            attachment: 1,
-            layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        };
-        let dependencies = [vk::SubpassDependency {
-            src_subpass: vk::SUBPASS_EXTERNAL,
-            src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_READ
-                | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-            dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            ..Default::default()
-        }];
-
-        let subpass = vk::SubpassDescription::default()
-            .color_attachments(&color_attachment_refs)
-            .depth_stencil_attachment(&depth_attachment_ref)
-            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS);
-
-        let renderpass_create_info = vk::RenderPassCreateInfo::default()
-            .attachments(&renderpass_attachments)
-            .subpasses(std::slice::from_ref(&subpass))
-            .dependencies(&dependencies);
-
-        let renderpass = base
-            .shared_device().lock().unwrap()
-            .create_render_pass(&renderpass_create_info, None)
-            .unwrap();
-
-        let framebuffers: Vec<vk::Framebuffer> = base
-            .present_image_views
-            .iter()
-            .map(|&present_image_view| {
-                let framebuffer_attachments = [present_image_view, base.depth_image.as_ref().unwrap().depth_image_view];
-                let frame_buffer_create_info = vk::FramebufferCreateInfo::default()
-                    .render_pass(renderpass)
-                    .attachments(&framebuffer_attachments)
-                    .width(base.surface_resolution.width)
-                    .height(base.surface_resolution.height)
-                    .layers(1);
-
-                base.shared_device().lock().unwrap()
-                    .create_framebuffer(&frame_buffer_create_info, None)
-                    .unwrap()
-            })
-            .collect();
 
         let vertices = make_quad_vertices(0.0, 0.0, 0.5, 0.5, 0.0);
 
@@ -649,7 +644,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .color_blend_state(&color_blend_state)
             .dynamic_state(&dynamic_state_info)
             .layout(pipeline_layout)
-            .render_pass(renderpass);
+            .render_pass(base.renderpass.as_ref().unwrap().render_pass);
 
         let graphics_pipelines = base
             .shared_device().lock().unwrap()
@@ -662,6 +657,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             let frame = base.increment_frame();
             if recreate_swapchain && frame > 10 {
                 println!("Should recreate swapchain");
+                base.shared_device().lock().unwrap().device_wait_idle().unwrap();
+                let resolution = get_window_resolution(window.clone());
+                println!("Recreating swapchain with resolution {:?}", resolution);
+                base.recreate_swapchain(resolution);
+                return;
             }
             let current_swapchain_image = base.get_next_swapchain_image_index();
 
@@ -675,15 +675,26 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             quads.remap_data();
 
-            let (present_index, _) = base
+            let acquisition_result = base
                 .swapchain_device
                 .acquire_next_image(
                     base.swapchain,
                     u64::MAX,
                     base.present_complete_semaphores[current_swapchain_image],
                     vk::Fence::null(),
-                )
-                .unwrap();
+                );
+            let present_index = match acquisition_result {
+                Ok((present_index, _)) => {
+                    present_index
+                }
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    println!("Swapchain out of date");
+                    return;
+                }
+                Err(e) => {
+                    panic!("Failed to acquire next image: {:?}", e);
+                }
+            };
             let clear_values = [
                 vk::ClearValue {
                     color: vk::ClearColorValue {
@@ -699,8 +710,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             ];
 
             let render_pass_begin_info = vk::RenderPassBeginInfo::default()
-                .render_pass(renderpass)
-                .framebuffer(framebuffers[present_index as usize])
+                .render_pass(base.renderpass.as_ref().unwrap().render_pass)
+                .framebuffer(base.framebuffers.as_ref().unwrap().framebuffers[present_index as usize])
                 .render_area(base.surface_resolution.into())
                 .clear_values(&clear_values);
 
@@ -766,9 +777,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                 p_image_indices: &present_index,
                 ..Default::default()
             };
-            base.swapchain_device
-                .queue_present(base.present_queue, &present_info)
-                .unwrap();
+            let presentation_result = base.swapchain_device
+                .queue_present(base.present_queue, &present_info);
+            match presentation_result {
+                Ok(_) => {}
+                Err(vk::Result::SUBOPTIMAL_KHR) => {
+                    println!("Swapchain suboptimal");
+                    return;
+                }
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    println!("Swapchain out of date");
+                    return;
+                }
+                Err(e) => {
+                    panic!("Failed to present: {:?}", e);
+                }
+            }
         });
         base.shared_device().lock().unwrap().device_wait_idle().unwrap();
 
@@ -791,10 +815,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         base.shared_device().lock().unwrap().destroy_descriptor_pool(descriptor_pool, None);
         base.shared_device().lock().unwrap().destroy_sampler(sampler, None);
-        for framebuffer in framebuffers {
-            base.shared_device().lock().unwrap().destroy_framebuffer(framebuffer, None);
-        }
-        base.shared_device().lock().unwrap().destroy_render_pass(renderpass, None);
 
         Ok(())
     }

@@ -34,7 +34,7 @@ use std::os::raw::c_void;
 
 use ash::util::*;
 
-pub fn render_loop<F: Fn()>(event_loop: RefCell<EventLoop<()>>, render: F) -> Result<(), impl Error> {
+pub fn render_loop<F: FnMut(bool)>(event_loop: RefCell<EventLoop<()>>, mut render: F) -> Result<(), impl Error> {
     event_loop.borrow_mut().run_on_demand(|event, elwp| {
         elwp.set_control_flow(ControlFlow::Poll);
         match event {
@@ -54,7 +54,13 @@ pub fn render_loop<F: Fn()>(event_loop: RefCell<EventLoop<()>>, render: F) -> Re
             } => {
                 elwp.exit();
             }
-            Event::AboutToWait => render(),
+            Event::WindowEvent {
+                event: WindowEvent::Resized(_),
+                ..
+            } => {
+                render(true);
+            }
+            Event::AboutToWait => render(false),
             _ => (),
         }
     })
@@ -135,10 +141,10 @@ impl ExampleBase {
             let surface_resolution = surf.get_resolution(get_window_resolution(window.clone()), &pdevice);
             let swapchain_device = make_swapchain_device(&instance, device.clone());
             let swapchain = create_standard_swapchain(&pdevice, &surf, surface_format, surface_resolution, &swapchain_device);
+            let (present_images, present_image_views) = get_swapchain_image_views(device.clone(), &swapchain_device, swapchain, surface_format);
 
             let command_pool = VulkanCommandPool::new(device.clone(), queue_family_index);
             let (setup_command_buffer, draw_command_buffer) = create_command_buffers(&command_pool, device.clone());
-            let (present_images, present_image_views) = get_swapchain_image_views(device.clone(), &swapchain_device, swapchain, surface_format);
             let device_memory_properties = instance.get_physical_device_memory_properties(pdevice);
             let depth_img = VulkanDepthImage::new(surface_resolution, device.clone(), device_memory_properties);
 
@@ -234,7 +240,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let (event_loop, window) = make_winit_window(app_name);
 
-        let base = ExampleBase::new(window.clone())?;
+        let mut base = ExampleBase::new(window.clone())?;
 
         let renderpass_attachments = [
             vk::AttachmentDescription {
@@ -652,9 +658,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let graphic_pipeline = graphics_pipelines[0];
 
-        let _ = render_loop(event_loop, || {
-            let current_swapchain_image = base.get_next_swapchain_image_index();
+        let _ = render_loop(event_loop, |recreate_swapchain| {
             let frame = base.increment_frame();
+            if recreate_swapchain && frame > 10 {
+                println!("Should recreate swapchain");
+            }
+            let current_swapchain_image = base.get_next_swapchain_image_index();
 
             for quad_id in 0..quads.quad_quantity() {
                 let distance_from_zero = (frame as f32 / ((quad_id as f32 + 1.0) * 43.0)).sin() / 2.0 + 0.5;

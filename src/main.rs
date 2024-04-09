@@ -8,7 +8,7 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::{record_submit_commandbuffer, submit_commandbuffer_to_ensure_depth_image_format}, debugging::{vulkan_debug_callback, VulkanDebugger}, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_attachments::{make_color_attachment, make_color_subpass_dependency, make_depth_attachment, make_standard_depth_color_attachments}, vulkan_commands::{create_command_buffers, get_device_presentation_queue, VulkanCommandPool}, vulkan_depth_image::VulkanDepthImage, vulkan_fences::create_standard_fences, vulkan_framebuffer::VulkanFramebuffers, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::{make_logical_device, make_swapchain_device}, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_render_pass::VulkanColorDepthRenderPass, vulkan_semaphores::create_semaphores, vulkan_surface::{get_standard_surface_image_count, get_surface_capabilities, get_surface_capabilities_pre_transform, VulkanSurface}, vulkan_swapchain::{create_standard_swapchain, get_swapchain_image_views}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::{get_window_resolution, make_winit_window}};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::{record_submit_commandbuffer, submit_commandbuffer_to_ensure_depth_image_format, submit_commandbuffer_to_load_image}, debugging::{vulkan_debug_callback, VulkanDebugger}, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_attachments::{make_color_attachment, make_color_subpass_dependency, make_depth_attachment, make_standard_depth_color_attachments}, vulkan_commands::{create_command_buffers, get_device_presentation_queue, VulkanCommandPool}, vulkan_depth_image::VulkanDepthImage, vulkan_fences::create_standard_fences, vulkan_framebuffer::VulkanFramebuffers, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::{make_logical_device, make_swapchain_device}, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_render_pass::VulkanColorDepthRenderPass, vulkan_semaphores::create_semaphores, vulkan_surface::{get_standard_surface_image_count, get_surface_capabilities, get_surface_capabilities_pre_transform, VulkanSurface}, vulkan_swapchain::{create_standard_swapchain, get_swapchain_image_views}, vulkan_texture::VulkanTexture, vulkan_ubo::VulkanUniformBufferObject, winit_window::{get_window_resolution, make_winit_window}};
 
 use std::{
     borrow::{Borrow, Cow}, cell::RefCell, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex},
@@ -253,6 +253,8 @@ impl ExampleBase {
             &self.depth_image.as_ref().unwrap(),
             &self.present_image_views,
         ));
+
+        // recreate pipeline
     }
 }
 
@@ -325,81 +327,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let img = VulkanImage::new_from_bytes(include_bytes!("../assets/rust_2.png"), base.shared_device(), base.device_memory_properties);
         let tex = VulkanTexture::new_from_image(&img, base.shared_device(), base.device_memory_properties);
-        let image_extent = img.extent();
 
-        // let img2 = VulkanImage::new_from_bytes(include_bytes!("../assets/rust_2.png"), base.shared_device(), base.device_memory_properties);
-        // let tex2 = VulkanTexture::new_from_image(&img2, base.shared_device(), base.device_memory_properties);
-
-        record_submit_commandbuffer(
-            &base.shared_device().lock().unwrap(),
-            base.setup_command_buffer,
-            base.setup_commands_reuse_fence,
-            base.present_queue,
-            &[],
-            &[],
-            &[],
-            |device, texture_command_buffer| {
-                let texture_barrier = vk::ImageMemoryBarrier {
-                    dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-                    new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    image: tex.texture_image,
-                    subresource_range: vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        level_count: 1,
-                        layer_count: 1,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                };
-                device.cmd_pipeline_barrier(
-                    texture_command_buffer,
-                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[texture_barrier],
-                );
-                let buffer_copy_regions = vk::BufferImageCopy::default()
-                    .image_subresource(
-                        vk::ImageSubresourceLayers::default()
-                            .aspect_mask(vk::ImageAspectFlags::COLOR)
-                            .layer_count(1),
-                    )
-                    .image_extent(image_extent.into());
-
-                device.cmd_copy_buffer_to_image(
-                    texture_command_buffer,
-                    img.image_buffer,
-                    tex.texture_image,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &[buffer_copy_regions],
-                );
-                let texture_barrier_end = vk::ImageMemoryBarrier {
-                    src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-                    dst_access_mask: vk::AccessFlags::SHADER_READ,
-                    old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    image: tex.texture_image,
-                    subresource_range: vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        level_count: 1,
-                        layer_count: 1,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                };
-                device.cmd_pipeline_barrier(
-                    texture_command_buffer,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::FRAGMENT_SHADER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[texture_barrier_end],
-                );
-            },
-        );
+        submit_commandbuffer_to_load_image(base.shared_device(), base.setup_command_buffer, base.setup_commands_reuse_fence, base.present_queue, &tex, &img);
 
         let sampler_info = vk::SamplerCreateInfo {
             mag_filter: vk::Filter::LINEAR,

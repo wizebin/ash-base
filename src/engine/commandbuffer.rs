@@ -9,7 +9,7 @@
 use std::{default::Default, sync::{Arc, Mutex}};
 use ash::{vk, Device};
 
-use super::vulkan_depth_image::VulkanDepthImage;
+use super::{vulkan_depth_image::VulkanDepthImage, vulkan_image::VulkanImage, vulkan_texture::VulkanTexture};
 
 /// Helper function for submitting command buffers. Immediately waits for the fence before the command buffer
 /// is executed. That way we can delay the waiting for the fences by 1 frame which is good for performance.
@@ -102,6 +102,88 @@ pub fn submit_commandbuffer_to_ensure_depth_image_format(device: Arc<Mutex<ash::
                 &[],
                 &[],
                 &[layout_transition_barriers],
+            ) };
+        },
+    );
+}
+
+pub fn submit_commandbuffer_to_load_image(device: Arc<Mutex<ash::Device>>, setup_command_buffer: vk::CommandBuffer, setup_commands_reuse_fence: vk::Fence, setup_command_buffer_submit_queue: vk::Queue, tex: &VulkanTexture, img: &VulkanImage) {
+    let locked_device = device.clone();
+    let locked_device = locked_device.lock().unwrap();
+
+    let image_extent = vk::Extent3D {
+        width: img.dimensions.width,
+        height: img.dimensions.height,
+        depth: 1,
+    };
+
+    record_submit_commandbuffer(
+        &locked_device,
+        setup_command_buffer,
+        setup_commands_reuse_fence,
+        setup_command_buffer_submit_queue,
+        &[],
+        &[],
+        &[],
+        |device, texture_command_buffer| {
+            let texture_barrier = vk::ImageMemoryBarrier {
+                dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+                new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                image: tex.texture_image,
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    level_count: 1,
+                    layer_count: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            unsafe { device.cmd_pipeline_barrier(
+                texture_command_buffer,
+                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[texture_barrier],
+            ) };
+            let buffer_copy_regions = vk::BufferImageCopy::default()
+                .image_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .layer_count(1),
+                )
+                .image_extent(image_extent.into());
+
+            unsafe { device.cmd_copy_buffer_to_image(
+                texture_command_buffer,
+                img.image_buffer,
+                tex.texture_image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[buffer_copy_regions],
+            ) };
+            let texture_barrier_end = vk::ImageMemoryBarrier {
+                src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+                dst_access_mask: vk::AccessFlags::SHADER_READ,
+                old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                image: tex.texture_image,
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    level_count: 1,
+                    layer_count: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            unsafe { device.cmd_pipeline_barrier(
+                texture_command_buffer,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[texture_barrier_end],
             ) };
         },
     );

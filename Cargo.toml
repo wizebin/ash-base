@@ -1,6 +1,6 @@
 [package]
-default-run = "ash-grid"
-name = "ash-grid"
+default-run = "ash-base"
+name = "ash-base"
 version = "0.1.0"
 edition = "2021"
 
@@ -19,5 +19,5 @@ name = "build_shaders"
 path = "scripts/build_shaders.rs"
 
 [[bin]]
-name = "ash-grid"
+name = "ash-base"
 path = "src/main.rs"

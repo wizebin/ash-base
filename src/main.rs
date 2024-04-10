@@ -241,7 +241,7 @@ impl ExampleBase {
         });
 
         let ubo = VulkanUniformBufferObject::new_from_vec3(ubo[0], self.shared_device(), self.device_memory_properties);
-        let img = self.image_manager.get_image("rust_2.png");
+        let img = self.image_manager.get_image("rust.png");
         let images = vec![img];
 
         let tex = VulkanTexture::new_from_image(&images[0], self.device.clone(), self.device_memory_properties);
@@ -541,12 +541,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
 
         let raw_ubo_data = vec![uniform_color_buffer_data];
-        let raw_images = vec![include_bytes!("../assets/rust_2.png")];
 
         let vertex_bytes = Vec::from(include_bytes!("../shader/texture/vert.spv"));
         let frag_bytes = Vec::from(include_bytes!("../shader/texture/frag.spv"));
 
-        base.add_image("rust_2.png", VulkanImage::new_from_bytes(raw_images[0], base.shared_device(), base.device_memory_properties));
+        base.add_image("rust.png", VulkanImage::new_from_bytes(include_bytes!("../assets/rust.png"), base.shared_device(), base.device_memory_properties));
+        base.add_image("rust_2.png", VulkanImage::new_from_bytes(include_bytes!("../assets/rust_2.png"), base.shared_device(), base.device_memory_properties));
         base.create_pipeline(vertex_bytes, frag_bytes, raw_ubo_data);
 
         println!("finished pipeline creation");

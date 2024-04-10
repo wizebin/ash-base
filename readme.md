@@ -6,6 +6,8 @@ This project is based on and further refined from several ash and general vulkan
 * [Vulkanalia documentation](https://kylemayes.github.io/vulkanalia/) even though it's not used in this project
 * [The Vulkan tutorial website](https://vulkan-tutorial.com/)
 
+![demo gif](docs/demo.gif)
+
 ## Warning
 
 This project is very young, my understanding of vulkan and general gpu interaction is still growing, this project is quite inefficient so use it at your own risk.

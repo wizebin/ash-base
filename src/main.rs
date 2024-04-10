@@ -84,20 +84,24 @@ impl ImageManager {
     pub fn add_image(&mut self, name: &'static str, image: VulkanImage) {
         self.images.insert(name, image);
     }
+
+    pub fn clear(&mut self) {
+        self.images.clear();
+    }
 }
 
 pub struct PipelineData {
-    pub graphics_pipelines: VulkanPipeline,
-    pub pipeline_layout: VulkanPipelineLayout,
-    pub vertex_shader: VulkanShader,
-    pub fragment_shader: VulkanShader,
+    pub texture: VulkanTexture,
+    pub sampler: VulkanSampler,
+    pub texture_view: VulkanTextureView,
     pub descriptor_pool: VulkanDescriptorPool,
     pub descriptor_set_layouts: VulkanDescriptorSetLayouts,
-    pub sampler: VulkanSampler,
-    pub texture: VulkanTexture,
-    pub texture_view: VulkanTextureView,
+    pub vertex_shader: VulkanShader,
+    pub fragment_shader: VulkanShader,
+    pub pipeline_layout: VulkanPipelineLayout,
     pub viewports: [vk::Viewport; 1],
     pub scissors: [vk::Rect2D; 1],
+    pub graphics_pipelines: VulkanPipeline, // must be last for automatic drop to be last
 }
 
 pub struct PipelineExtras {
@@ -531,8 +535,10 @@ impl Drop for ExampleBase {
                 self.swapchain_device
                     .destroy_swapchain(self.swapchain, None);
             }
+            self.pipeline_data = None;
             self.command_pool = None;
             self.surface = None;
+            self.image_manager.clear();
             {
                 let device = self.device.lock().unwrap();
                 device.destroy_device(None);

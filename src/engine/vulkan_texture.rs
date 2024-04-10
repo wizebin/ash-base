@@ -144,3 +144,12 @@ impl VulkanTextureView {
     }
   }
 }
+
+impl Drop for VulkanTextureView {
+  fn drop(&mut self) {
+    let locked_device = self.device.lock().unwrap();
+    unsafe {
+        locked_device.destroy_image_view(self.texture_image_view, None);
+    }
+  }
+}

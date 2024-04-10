@@ -518,7 +518,7 @@ impl Drop for VulkanBase {
 
 fn main() -> Result<(), Box<dyn Error>> {
     unsafe {
-        let app_name = "Ash Grid";
+        let app_name = "Ash Base";
 
         let (event_loop, window) = make_winit_window(app_name);
 

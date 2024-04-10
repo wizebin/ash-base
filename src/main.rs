@@ -81,7 +81,7 @@ pub struct PipelineExtras {
     raw_ubo_data: Vec<Vector3>,
 }
 
-pub struct ExampleBase {
+pub struct VulkanBase {
     pub entry: Entry,
     pub instance: Instance,
     pub device: Arc<Mutex<Device>>,
@@ -123,7 +123,7 @@ pub struct ExampleBase {
     pub image_manager: ImageManager,
 }
 
-impl ExampleBase {
+impl VulkanBase {
     pub fn shared_device(&self) -> Arc<Mutex<Device>> {
         self.device.clone()
     }
@@ -473,7 +473,7 @@ impl ExampleBase {
     }
 }
 
-impl Drop for ExampleBase {
+impl Drop for VulkanBase {
     fn drop(&mut self) {
         self.depth_image = None;
         self.framebuffers = None;
@@ -522,7 +522,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let (event_loop, window) = make_winit_window(app_name);
 
-        let mut base = ExampleBase::new(window.clone())?;
+        let mut base = VulkanBase::new(window.clone())?;
 
         let vertices = make_quad_vertices(0.0, 0.0, 0.5, 0.5, 0.0);
 

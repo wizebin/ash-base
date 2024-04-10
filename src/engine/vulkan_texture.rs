@@ -5,6 +5,7 @@ use ash::util::Align;
 use ash::{vk, Device};
 
 use super::vulkan_image::VulkanImage;
+use super::vulkan_sampler::VulkanSampler;
 use super::{dimensions::Dimensions, memory::find_memorytype_index};
 
 
@@ -70,6 +71,76 @@ impl Drop for VulkanTexture {
     unsafe {
         locked_device.free_memory(self.texture_memory, None);
         locked_device.destroy_image(self.texture_image, None);
+    }
+  }
+}
+
+// let tex_image_view_info = vk::ImageViewCreateInfo {
+//     view_type: vk::ImageViewType::TYPE_2D,
+//     format: tex.format,
+//     components: vk::ComponentMapping {
+//         r: vk::ComponentSwizzle::R,
+//         g: vk::ComponentSwizzle::G,
+//         b: vk::ComponentSwizzle::B,
+//         a: vk::ComponentSwizzle::A,
+//     },
+//     subresource_range: vk::ImageSubresourceRange {
+//         aspect_mask: vk::ImageAspectFlags::COLOR,
+//         level_count: 1,
+//         layer_count: 1,
+//         ..Default::default()
+//     },
+//     image: tex.texture_image,
+//     ..Default::default()
+// };
+// let tex_image_view = base
+//     .shared_device().lock().unwrap()
+//     .create_image_view(&tex_image_view_info, None)
+//     .unwrap();
+
+pub struct VulkanTextureView {
+  pub device: Arc<Mutex<Device>>,
+  pub texture_image_view: vk::ImageView,
+}
+
+impl VulkanTextureView {
+  pub fn new(device: Arc<Mutex<Device>>, texture: &VulkanTexture) -> Self {
+    let tex_image_view_info = vk::ImageViewCreateInfo {
+        view_type: vk::ImageViewType::TYPE_2D,
+        format: texture.format,
+        components: vk::ComponentMapping {
+            r: vk::ComponentSwizzle::R,
+            g: vk::ComponentSwizzle::G,
+            b: vk::ComponentSwizzle::B,
+            a: vk::ComponentSwizzle::A,
+        },
+        subresource_range: vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            level_count: 1,
+            layer_count: 1,
+            ..Default::default()
+        },
+        image: texture.texture_image,
+        ..Default::default()
+    };
+    let locked_device = device.clone();
+    let locked_device = locked_device.lock().unwrap();
+
+    let texture_image_view = unsafe { locked_device
+        .create_image_view(&tex_image_view_info, None)
+        .unwrap() };
+
+    Self {
+      device,
+      texture_image_view,
+    }
+  }
+
+  pub fn get_descriptor_info(&self, sampler: &VulkanSampler) -> vk::DescriptorImageInfo {
+    vk::DescriptorImageInfo {
+        image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        image_view: self.texture_image_view,
+        sampler: sampler.sampler,
     }
   }
 }

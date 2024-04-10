@@ -22,3 +22,8 @@ pub mod vulkan_semaphores;
 pub mod vulkan_attachments;
 pub mod vulkan_render_pass;
 pub mod vulkan_framebuffer;
+pub mod vulkan_sampler;
+pub mod vulkan_descriptor;
+pub mod vulkan_bindings;
+pub mod vulkan_shaders;
+pub mod vulkan_pipeline;

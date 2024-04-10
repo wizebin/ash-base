@@ -35,5 +35,11 @@ You can run this command for a "live reload" style
 Install [cargo-watch](https://crates.io/crates/cargo-watch) with `cargo install cargo-watch`
 
 ```sh
-RUST_BACKTRACE=1 ALWAYS_ON_TOP=true cargo-watch -x run
+RUST_BACKTRACE=1 ALWAYS_ON_TOP=1 VULKAN_DEBUG=1 cargo-watch -x run
+```
+
+#### Flamegraph
+
+```sh
+sudo -E zsh -ic "cargo flamegraph --freq 1994"
 ```

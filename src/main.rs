@@ -11,7 +11,7 @@ mod engine;
 use engine::{coherent_quads::CoherentQuads, commandbuffer::{record_submit_commandbuffer, submit_commandbuffer_to_ensure_depth_image_format, submit_commandbuffer_to_load_image}, debugging::VulkanDebugger, image_manager::ImageManager, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_bindings::{make_image_sampler_fragment_layout_binding, make_ubo_fragment_layout_binding}, vulkan_commands::{create_command_buffers, get_device_presentation_queue, VulkanCommandPool}, vulkan_depth_image::VulkanDepthImage, vulkan_descriptor::{make_image_sampler_pool_size, make_ubo_pool_size, update_device_descriptor_sets, VulkanDescriptorPool, VulkanDescriptorSetLayouts}, vulkan_fences::create_standard_fences, vulkan_framebuffer::VulkanFramebuffers, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::{make_logical_device, make_swapchain_device}, vulkan_physical_device::get_physical_device_and_family_that_support, vulkan_pipeline::{VulkanPipeline, VulkanPipelineLayout}, vulkan_render_pass::VulkanColorDepthRenderPass, vulkan_sampler::VulkanSampler, vulkan_semaphores::create_semaphores, vulkan_shaders::VulkanShader, vulkan_surface::VulkanSurface, vulkan_swapchain::{create_standard_swapchain, get_swapchain_image_views}, vulkan_texture::{VulkanTexture, VulkanTextureView}, vulkan_ubo::VulkanUniformBufferObject, winit_window::{get_window_resolution, make_winit_window}};
 
 use std::{
-    cell::RefCell, default::Default, error::Error, ffi, ops::Drop, sync::{Arc, Mutex}
+    cell::RefCell, default::Default, error::Error, ffi, ops::Drop, sync::{mpsc, Arc, Mutex}
 };
 
 use ash::{
@@ -29,7 +29,9 @@ use winit::{
 use std::io::Cursor;
 use std::mem;
 
-pub fn render_loop<F: FnMut(bool)>(event_loop: RefCell<EventLoop<()>>, mut render: F) -> Result<(), impl Error> {
+use crate::engine::input_state::{InputState, InputStateEvent};
+
+pub fn render_loop<F: FnMut(bool)>(event_loop: RefCell<EventLoop<()>>, event_sender: mpsc::Sender<InputStateEvent>, mut render: F) -> Result<(), impl Error> {
     event_loop.borrow_mut().run_on_demand(|event, elwp| {
         elwp.set_control_flow(ControlFlow::Poll);
         match event {
@@ -48,6 +50,26 @@ pub fn render_loop<F: FnMut(bool)>(event_loop: RefCell<EventLoop<()>>, mut rende
                 ..
             } => {
                 elwp.exit();
+            }
+            Event::WindowEvent { event: WindowEvent::CursorMoved { device_id, position }, .. } => {
+                event_sender.send(InputStateEvent::CursorMoved((position.x, position.y))).unwrap();
+            }
+            Event::WindowEvent { event: WindowEvent::MouseInput { device_id, state, button }, .. } => {
+                let button_index = match button {
+                    winit::event::MouseButton::Left => 0,
+                    winit::event::MouseButton::Right => 1,
+                    winit::event::MouseButton::Middle => 2,
+                    _ => return,
+                };
+
+                match state {
+                    ElementState::Pressed => {
+                        event_sender.send(InputStateEvent::MouseButtonPressed(button_index)).unwrap();
+                    }
+                    ElementState::Released => {
+                        event_sender.send(InputStateEvent::MouseButtonReleased(button_index)).unwrap();
+                    }
+                }
             }
             Event::WindowEvent {
                 event: WindowEvent::Resized(_),
@@ -152,7 +174,11 @@ impl VulkanBase {
 
             let instance = make_vulkan_instance(title.as_str(), &entry, window.clone())?;
 
-            let debugger = VulkanDebugger::new(&entry, &instance);
+
+            let debugger = match option_env!("VULKAN_DEBUG") {
+                Some("1") => Some(VulkanDebugger::new(&entry, &instance)),
+                _ => None,
+            };
             let surf = VulkanSurface::new(&entry, &instance, window.clone());
             let (pdevice, queue_family_index) = get_physical_device_and_family_that_support(&instance, &surf.surface_loader, surf.surface);
             let device = make_logical_device(&instance, pdevice, queue_family_index);
@@ -217,7 +243,7 @@ impl VulkanBase {
                 current_swapchain_image: RefCell::new(0),
                 frame: RefCell::new(0),
                 depth_image: Some(depth_img),
-                debugger: Some(debugger),
+                debugger: debugger,
                 command_pool: Some(command_pool),
                 surface: Some(surf),
                 renderpass: Some(renderpass),
@@ -526,7 +552,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let vertices = make_quad_vertices(0.0, 0.0, 0.5, 0.5, 0.0);
 
-        let quad_quantity = 3;
+        let quad_quantity = 5;
         let mut quads = CoherentQuads::new(quad_quantity, base.shared_device(), base.device_memory_properties);
         for _ in 0..quad_quantity {
             quads.add_quad(vertices.clone());
@@ -551,8 +577,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         println!("finished pipeline creation");
 
-        let _ = render_loop(event_loop, |recreate_swapchain| {
+        let inputstate = RefCell::new(InputState::new());
+        let event_sender = inputstate.borrow_mut().sender_clone();
+
+        let _ = render_loop(event_loop, event_sender, |recreate_swapchain| {
             let frame = base.increment_frame();
+            inputstate.borrow_mut().consume_channel_events();
             if recreate_swapchain && frame > 10 {
                 println!("Should recreate swapchain");
                 base.shared_device().lock().unwrap().device_wait_idle().unwrap();
@@ -566,10 +596,19 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             for quad_id in 0..quads.quad_quantity() {
                 let distance_from_zero = (frame as f32 / ((quad_id as f32 + 1.0) * 43.0)).sin() / 2.0 + 0.5;
-                let y_position = (frame as f32 / 43.0).sin() / 2.0 - 1.0;
+                let size = distance_from_zero * 2.0;
+                let x_position = match inputstate.borrow().mouse_buttons[0] {
+                    true => inputstate.borrow().cursor_position.0 as f32 / base.surface_resolution.width as f32 * 2.0 - 1.0 - size / 2.0,
+                    false => quad_id as f32 / quads.quad_quantity() as f32 - 1.0,
+                };
+                let y_position = match inputstate.borrow().mouse_buttons[0] {
+                    true => inputstate.borrow().cursor_position.1 as f32 / base.surface_resolution.height as f32 * 2.0 - 1.0 - size / 2.0,
+                    false => (frame as f32 / 43.0).sin() / 2.0 - 1.0,
+                };
+                // let y_position = (frame as f32 / 43.0).sin() / 2.0 - 1.0;
                 let rotation = (frame as f32 / 43.0).cos() / 2.0;
 
-                quads.modify_quad(quad_id, make_quad_vertices(quad_id as f32 / quads.quad_quantity() as f32 - 1.0, y_position, distance_from_zero * 2.0, distance_from_zero * 2.0, rotation));
+                quads.modify_quad(quad_id, make_quad_vertices(x_position, y_position, size, size, rotation));
             }
 
             quads.remap_data();

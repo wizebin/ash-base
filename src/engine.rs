@@ -28,3 +28,4 @@ pub mod vulkan_bindings;
 pub mod vulkan_shaders;
 pub mod vulkan_pipeline;
 pub mod image_manager;
+pub mod input_state;

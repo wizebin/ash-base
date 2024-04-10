@@ -8,31 +8,26 @@
 )]
 
 mod engine;
-use engine::{coherent_quads::CoherentQuads, commandbuffer::{record_submit_commandbuffer, submit_commandbuffer_to_ensure_depth_image_format, submit_commandbuffer_to_load_image}, debugging::{vulkan_debug_callback, VulkanDebugger}, memory::find_memorytype_index, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_attachments::{make_color_attachment, make_color_subpass_dependency, make_depth_attachment, make_standard_depth_color_attachments}, vulkan_bindings::{make_image_sampler_fragment_layout_binding, make_ubo_fragment_layout_binding}, vulkan_commands::{create_command_buffers, get_device_presentation_queue, VulkanCommandPool}, vulkan_depth_image::VulkanDepthImage, vulkan_descriptor::{make_image_sampler_pool_size, make_ubo_pool_size, update_device_descriptor_sets, VulkanDescriptorPool, VulkanDescriptorSetLayouts}, vulkan_fences::create_standard_fences, vulkan_framebuffer::VulkanFramebuffers, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::{make_logical_device, make_swapchain_device}, vulkan_physical_device::{get_mailbox_or_fifo_present_mode, get_physical_device_and_family_that_support}, vulkan_pipeline::{VulkanPipeline, VulkanPipelineLayout}, vulkan_render_pass::VulkanColorDepthRenderPass, vulkan_sampler::VulkanSampler, vulkan_semaphores::create_semaphores, vulkan_shaders::VulkanShader, vulkan_surface::{get_standard_surface_image_count, get_surface_capabilities, get_surface_capabilities_pre_transform, VulkanSurface}, vulkan_swapchain::{create_standard_swapchain, get_swapchain_image_views}, vulkan_texture::{VulkanTexture, VulkanTextureView}, vulkan_ubo::VulkanUniformBufferObject, winit_window::{get_window_resolution, make_winit_window}};
+use engine::{coherent_quads::CoherentQuads, commandbuffer::{record_submit_commandbuffer, submit_commandbuffer_to_ensure_depth_image_format, submit_commandbuffer_to_load_image}, debugging::VulkanDebugger, image_manager::ImageManager, vec3::Vector3, vertex::Vertex, vertex_generation::make_quad_vertices, vulkan_bindings::{make_image_sampler_fragment_layout_binding, make_ubo_fragment_layout_binding}, vulkan_commands::{create_command_buffers, get_device_presentation_queue, VulkanCommandPool}, vulkan_depth_image::VulkanDepthImage, vulkan_descriptor::{make_image_sampler_pool_size, make_ubo_pool_size, update_device_descriptor_sets, VulkanDescriptorPool, VulkanDescriptorSetLayouts}, vulkan_fences::create_standard_fences, vulkan_framebuffer::VulkanFramebuffers, vulkan_image::VulkanImage, vulkan_instance::make_vulkan_instance, vulkan_logical_device::{make_logical_device, make_swapchain_device}, vulkan_physical_device::get_physical_device_and_family_that_support, vulkan_pipeline::{VulkanPipeline, VulkanPipelineLayout}, vulkan_render_pass::VulkanColorDepthRenderPass, vulkan_sampler::VulkanSampler, vulkan_semaphores::create_semaphores, vulkan_shaders::VulkanShader, vulkan_surface::VulkanSurface, vulkan_swapchain::{create_standard_swapchain, get_swapchain_image_views}, vulkan_texture::{VulkanTexture, VulkanTextureView}, vulkan_ubo::VulkanUniformBufferObject, winit_window::{get_window_resolution, make_winit_window}};
 
 use std::{
-    borrow::{Borrow, Cow}, cell::RefCell, collections::HashMap, default::Default, error::Error, ffi, ops::Drop, os::raw::c_char, sync::{Arc, Mutex}
+    cell::RefCell, default::Default, error::Error, ffi, ops::Drop, sync::{Arc, Mutex}
 };
 
 use ash::{
-    ext::debug_utils,
-    khr::{surface, swapchain},
+    khr::swapchain,
     vk, Device, Entry, Instance,
 };
 use winit::{
     event::{ElementState, Event, KeyEvent, WindowEvent},
-    event_loop::{ControlFlow, EventLoop, EventLoopBuilder},
+    event_loop::{ControlFlow, EventLoop},
     keyboard::{Key, NamedKey},
-    platform::{macos::EventLoopBuilderExtMacOS, run_on_demand::EventLoopExtRunOnDemand},
-    raw_window_handle::{HasDisplayHandle, HasWindowHandle},
-    window::{Window, WindowBuilder},
+    platform::run_on_demand::EventLoopExtRunOnDemand,
+    window::Window,
 };
 
 use std::io::Cursor;
 use std::mem;
-use std::os::raw::c_void;
-
-use ash::util::*;
 
 pub fn render_loop<F: FnMut(bool)>(event_loop: RefCell<EventLoop<()>>, mut render: F) -> Result<(), impl Error> {
     event_loop.borrow_mut().run_on_demand(|event, elwp| {
@@ -66,30 +61,6 @@ pub fn render_loop<F: FnMut(bool)>(event_loop: RefCell<EventLoop<()>>, mut rende
     })
 }
 
-pub struct ImageManager {
-    images: HashMap<&'static str, VulkanImage>,
-}
-
-impl ImageManager {
-    pub fn new() -> Self {
-        Self {
-            images: HashMap::new(),
-        }
-    }
-
-    pub fn get_image(&self, name: &'static str) -> &VulkanImage {
-        self.images.get(name).unwrap()
-    }
-
-    pub fn add_image(&mut self, name: &'static str, image: VulkanImage) {
-        self.images.insert(name, image);
-    }
-
-    pub fn clear(&mut self) {
-        self.images.clear();
-    }
-}
-
 pub struct PipelineData {
     pub texture: VulkanTexture,
     pub sampler: VulkanSampler,
@@ -101,14 +72,10 @@ pub struct PipelineData {
     pub pipeline_layout: VulkanPipelineLayout,
     pub viewports: [vk::Viewport; 1],
     pub scissors: [vk::Rect2D; 1],
-    pub graphics_pipelines: VulkanPipeline, // must be last for automatic drop to be last
+    pub graphics_pipelines: VulkanPipeline, // must be last for automatic drop to be last, https://github.com/rust-lang/rfcs/blob/246ff86b320a72f98ed2df92805e8e3d48b402d6/text/1857-stabilize-drop-order.md
 }
 
 pub struct PipelineExtras {
-    // vertex_spv_file,
-    // frag_spv_file,
-    // ubo,
-    // images,
     vertex_bytes: Vec<u8>,
     frag_bytes: Vec<u8>,
     raw_ubo_data: Vec<Vector3>,

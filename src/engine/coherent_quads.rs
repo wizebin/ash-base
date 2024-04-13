@@ -147,6 +147,17 @@ impl CoherentQuads {
             .copy_from_slice(&vertices);
     }
 
+    pub fn get_quad(&self, index: usize) -> [Vertex; 4] {
+        let index_offset = index as u32 * 4;
+        let borrow_data = self.local_vertex_buffer_data.borrow();
+        [
+            borrow_data[index_offset as usize],
+            borrow_data[(index_offset + 1) as usize],
+            borrow_data[(index_offset + 2) as usize],
+            borrow_data[(index_offset + 3) as usize],
+        ]
+    }
+
     pub fn remap_data(&self) {
         let device = self.device.as_ref();
         match device.lock() {

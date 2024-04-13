@@ -267,7 +267,7 @@ impl VulkanBase {
         });
 
         let ubo = VulkanUniformBufferObject::new_from_vec3(ubo[0], self.shared_device(), self.device_memory_properties);
-        let img = self.image_manager.get_image("rust.png");
+        let img = self.image_manager.get_image("sprite");
         let images = vec![img];
 
         let tex = VulkanTexture::new_from_image(&images[0], self.device.clone(), self.device_memory_properties);
@@ -552,7 +552,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let vertices = make_quad_vertices(0.0, 0.0, 0.5, 0.5, 0.0);
 
-        let quad_quantity = 5;
+        let quad_quantity = 100;
         let mut quads = CoherentQuads::new(quad_quantity, base.shared_device(), base.device_memory_properties);
         for _ in 0..quad_quantity {
             quads.add_quad(vertices.clone());
@@ -571,8 +571,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let vertex_bytes = Vec::from(include_bytes!("../shader/texture/vert.spv"));
         let frag_bytes = Vec::from(include_bytes!("../shader/texture/frag.spv"));
 
-        base.add_image("rust.png", VulkanImage::new_from_bytes(include_bytes!("../assets/rust.png"), base.shared_device(), base.device_memory_properties));
-        base.add_image("rust_2.png", VulkanImage::new_from_bytes(include_bytes!("../assets/rust_2.png"), base.shared_device(), base.device_memory_properties));
+        base.add_image("sprite", VulkanImage::new_from_bytes(include_bytes!("../assets/dirty_grass_16.png"), base.shared_device(), base.device_memory_properties));
         base.create_pipeline(vertex_bytes, frag_bytes, raw_ubo_data);
 
         println!("finished pipeline creation");
@@ -595,20 +594,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             let current_swapchain_image = base.get_next_swapchain_image_index();
 
             for quad_id in 0..quads.quad_quantity() {
+                let quad_current = quads.get_quad(quad_id);
+
+                let movement_factor: f32 = (frame as f32 + quad_id as f32 * 20.0) / 100.0;
+                let mv: (f32, f32) = (movement_factor.sin() / 10000.0, movement_factor.cos() / 10000.0);
+
                 let distance_from_zero = (frame as f32 / ((quad_id as f32 + 1.0) * 43.0)).sin() / 2.0 + 0.5;
                 let size = distance_from_zero * 2.0;
                 let x_position = match inputstate.borrow().mouse_buttons[0] {
                     true => inputstate.borrow().cursor_position.0 as f32 / base.surface_resolution.width as f32 * 2.0 - 1.0 - size / 2.0,
-                    false => quad_id as f32 / quads.quad_quantity() as f32 - 1.0,
+                    false => quad_current[0].pos[0] + mv.0,
                 };
                 let y_position = match inputstate.borrow().mouse_buttons[0] {
                     true => inputstate.borrow().cursor_position.1 as f32 / base.surface_resolution.height as f32 * 2.0 - 1.0 - size / 2.0,
-                    false => (frame as f32 / 43.0).sin() / 2.0 - 1.0,
+                    false => quad_current[0].pos[1] + mv.1,
                 };
                 // let y_position = (frame as f32 / 43.0).sin() / 2.0 - 1.0;
                 let rotation = (frame as f32 / 43.0).cos() / 2.0;
 
-                quads.modify_quad(quad_id, make_quad_vertices(x_position, y_position, size, size, rotation));
+                quads.modify_quad(quad_id, make_quad_vertices(x_position, y_position, size, size, 0.0));
             }
 
             quads.remap_data();

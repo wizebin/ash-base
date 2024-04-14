@@ -571,7 +571,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let vertex_bytes = Vec::from(include_bytes!("../shader/texture/vert.spv"));
         let frag_bytes = Vec::from(include_bytes!("../shader/texture/frag.spv"));
 
-        base.add_image("sprite", VulkanImage::new_from_bytes(include_bytes!("../assets/dirty_grass_16.png"), base.shared_device(), base.device_memory_properties));
+        base.add_image("sprite", VulkanImage::new_from_bytes(include_bytes!("../assets/rust.png"), base.shared_device(), base.device_memory_properties));
         base.create_pipeline(vertex_bytes, frag_bytes, raw_ubo_data);
 
         println!("finished pipeline creation");

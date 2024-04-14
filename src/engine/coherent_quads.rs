@@ -28,12 +28,13 @@ impl Debug for CoherentQuads {
 }
 
 impl CoherentQuads {
-    pub unsafe fn new(max_quad_quantity: u32, device: Arc<Mutex<Device>>, device_memory_properties: vk::PhysicalDeviceMemoryProperties) -> Self {
+     pub unsafe fn new(max_quad_quantity: u32, device: Arc<Mutex<Device>>, device_memory_properties: vk::PhysicalDeviceMemoryProperties) -> Self {
         let local_vertex_buffer_data: RefCell<Vec<Vertex>> = RefCell::new(Vec::with_capacity(max_quad_quantity as usize * 4));
         let local_index_buffer_data: Vec<u32> = Vec::with_capacity(max_quad_quantity as usize * 6);
 
         let byte_size_of_single_vertex = mem::size_of::<Vertex>() as u64;
         let byte_size_of_index_instance = 6 * mem::size_of::<u32>() as u64;
+        let byte_size_of_quad_instance = 4 * byte_size_of_single_vertex;
 
         let index_buffer_info = vk::BufferCreateInfo {
             size: byte_size_of_index_instance * (max_quad_quantity as u64),
@@ -43,7 +44,7 @@ impl CoherentQuads {
         };
 
         let vertex_input_buffer_info = vk::BufferCreateInfo {
-            size: byte_size_of_single_vertex * (max_quad_quantity as u64),
+            size: byte_size_of_quad_instance * (max_quad_quantity as u64),
             usage: vk::BufferUsageFlags::VERTEX_BUFFER,
             sharing_mode: vk::SharingMode::EXCLUSIVE,
             ..Default::default()
